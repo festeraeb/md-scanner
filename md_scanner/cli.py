@@ -114,7 +114,7 @@ def search(query, index_dir, top_k, semantic_weight):
     for i, (file_path, score) in enumerate(results, 1):
         file_name = Path(file_path).name
         click.echo(f"  {i}. {file_name} ({score:.3f})")
-        click.echo(f"     → {file_path}")
+        click.echo(f"     => {file_path}")
 
 @cli.command()
 @click.option('--index-dir', default=str(INDEX_DIR), help='Index directory')
