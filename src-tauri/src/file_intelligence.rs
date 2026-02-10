@@ -3,7 +3,6 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 use chrono::{DateTime, Local};
@@ -114,7 +113,7 @@ pub struct NamingPattern {
     pub confidence: f32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum PatternType {
     DatePrefix,         // 2026-02-10-filename.docx
     DateSuffix,         // filename-2026-02-10.docx
@@ -433,7 +432,7 @@ fn is_poorly_named(name: &str) -> bool {
         "file", "download", "attachment", "scan", "img_", "dsc_",
     ];
     
-    let name_lower = name.to_lowercase();
+    let _name_lower = name.to_lowercase();
     let stem = Path::new(name)
         .file_stem()
         .map(|s| s.to_string_lossy().to_lowercase())

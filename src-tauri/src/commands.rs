@@ -1432,7 +1432,7 @@ pub async fn delete_duplicate_files(file_paths: Vec<String>) -> Result<serde_jso
 // ============================================================================
 
 use crate::file_intelligence::{
-    self, DiscoveredDocument, OrganizationSuggestion, ScanStatistics, UserPreferences,
+    self, DiscoveredDocument, UserPreferences,
 };
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
@@ -1538,7 +1538,7 @@ pub async fn dismiss_suggestion(file_path: String) -> Result<serde_json::Value, 
 // FILE WATCHER COMMANDS
 // ============================================================================
 
-use crate::file_watcher::{FileWatcher, WatchConfig, FileEvent, SavePrompterConfig};
+use crate::file_watcher::{FileWatcher, WatchConfig, FileEvent};
 
 static FILE_WATCHER: Lazy<Mutex<Option<FileWatcher>>> = Lazy::new(|| Mutex::new(None));
 static WATCHER_EVENTS: Lazy<Mutex<Vec<FileEvent>>> = Lazy::new(|| Mutex::new(Vec::new()));
@@ -1563,10 +1563,9 @@ pub async fn start_file_watcher(watch_paths: Option<Vec<String>>) -> Result<serd
     }
     
     // Spawn a thread to collect events
-    let events = Arc::clone(&WATCHER_EVENTS);
     std::thread::spawn(move || {
         while let Ok(event) = rx.recv() {
-            if let Ok(mut e) = events.lock() {
+            if let Ok(mut e) = WATCHER_EVENTS.lock() {
                 e.push(event);
                 // Keep only last 100 events
                 if e.len() > 100 {
@@ -1642,7 +1641,5 @@ pub async fn get_watcher_status() -> Result<serde_json::Value, String> {
         "pending_events": events.len()
     }))
 }
-
-use std::sync::Arc;
 
 

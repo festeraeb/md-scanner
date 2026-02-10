@@ -136,7 +136,7 @@ pub fn record_decision(
 }
 
 /// Update pattern confidence based on user decision
-fn update_pattern_from_decision(conn: &Connection, suggestion_type: &str, accepted: bool) -> Result<(), String> {
+fn update_pattern_from_decision(conn: &Connection, suggestion_type: &str, _accepted: bool) -> Result<(), String> {
     // Get current stats for this suggestion type
     let (accept_count, reject_count): (i32, i32) = conn.query_row(
         "SELECT 
