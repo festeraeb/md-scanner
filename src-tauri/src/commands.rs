@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use walkdir::WalkDir;
-use chrono::{DateTime, Local, Duration};
+use chrono::{DateTime, Local};
 use rand::Rng;
 
 // Import git_assistant module from crate root
@@ -782,16 +782,133 @@ fn kmeans_cluster(embeddings: &[FileEmbedding], k: usize) -> Vec<Cluster> {
             .collect();
         
         if !file_paths.is_empty() {
+            let label = generate_cluster_label(&file_paths);
             clusters.push(Cluster {
                 id: j,
                 centroid: centroids[j].clone(),
                 file_paths,
-                label: None, // Could be auto-generated from common terms
+                label: Some(label),
             });
         }
     }
     
     clusters
+}
+
+/// Generate a descriptive label for a cluster based on its files
+fn generate_cluster_label(file_paths: &[String]) -> String {
+    use std::collections::HashMap;
+    
+    let mut dir_counts: HashMap<String, usize> = HashMap::new();
+    let mut ext_counts: HashMap<String, usize> = HashMap::new();
+    let mut word_counts: HashMap<String, usize> = HashMap::new();
+    
+    // Common words to ignore
+    let stopwords: std::collections::HashSet<&str> = [
+        "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
+        "of", "with", "by", "from", "as", "is", "was", "are", "were", "been",
+        "be", "have", "has", "had", "do", "does", "did", "will", "would", "could",
+        "should", "may", "might", "must", "shall", "can", "need", "dare", "ought",
+        "used", "index", "main", "test", "spec", "temp", "tmp", "copy", "new", "old"
+    ].iter().cloned().collect();
+    
+    for path in file_paths {
+        let path_obj = Path::new(path);
+        
+        // Count parent directories
+        if let Some(parent) = path_obj.parent() {
+            if let Some(dir_name) = parent.file_name() {
+                let dir = dir_name.to_string_lossy().to_lowercase();
+                if !dir.is_empty() && dir.len() > 1 {
+                    *dir_counts.entry(dir).or_insert(0) += 1;
+                }
+            }
+        }
+        
+        // Count extensions
+        if let Some(ext) = path_obj.extension() {
+            let ext_str = ext.to_string_lossy().to_lowercase();
+            *ext_counts.entry(ext_str).or_insert(0) += 1;
+        }
+        
+        // Extract words from filename
+        if let Some(stem) = path_obj.file_stem() {
+            let name = stem.to_string_lossy().to_lowercase();
+            // Split on non-alphanumeric characters
+            for word in name.split(|c: char| !c.is_alphanumeric()) {
+                if word.len() > 2 && !stopwords.contains(word) {
+                    *word_counts.entry(word.to_string()).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+    
+    // Find most common extension
+    let top_ext = ext_counts
+        .iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(ext, _)| ext.clone());
+    
+    // Find most common directory
+    let top_dir = dir_counts
+        .iter()
+        .filter(|(dir, _)| dir.len() > 2)
+        .max_by_key(|(_, count)| *count)
+        .map(|(dir, _)| dir.clone());
+    
+    // Find most common meaningful word
+    let top_word = word_counts
+        .iter()
+        .filter(|(word, count)| word.len() > 3 && **count > 1)
+        .max_by_key(|(_, count)| *count)
+        .map(|(word, _)| word.clone());
+    
+    // Build label
+    let mut parts: Vec<String> = Vec::new();
+    
+    if let Some(word) = top_word {
+        parts.push(capitalize(&word));
+    }
+    
+    if let Some(dir) = top_dir {
+        if parts.is_empty() || !parts[0].to_lowercase().contains(&dir) {
+            parts.push(capitalize(&dir));
+        }
+    }
+    
+    if let Some(ext) = top_ext {
+        let ext_label = match ext.as_str() {
+            "md" => "Docs",
+            "rs" => "Rust",
+            "ts" | "tsx" => "TypeScript",
+            "js" | "jsx" => "JavaScript",
+            "py" => "Python",
+            "json" => "Config",
+            "yaml" | "yml" => "Config",
+            "css" | "scss" => "Styles",
+            "html" => "HTML",
+            "sql" => "Database",
+            "sh" | "bash" => "Scripts",
+            "txt" => "Text",
+            _ => &ext,
+        };
+        parts.push(ext_label.to_string());
+    }
+    
+    if parts.is_empty() {
+        format!("Group ({})", file_paths.len())
+    } else {
+        parts.join(" ")
+    }
+}
+
+/// Capitalize first letter of a string
+fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(f) => f.to_uppercase().chain(chars).collect(),
+    }
 }
 
 /// Cosine distance between two vectors (1 - cosine similarity)
@@ -816,7 +933,7 @@ pub async fn search(
     query: String,
     index_dir: String,
     top_k: usize,
-    semantic_weight: f32,
+    _semantic_weight: f32,
 ) -> Result<serde_json::Value, String> {
     let index_path = Path::new(&index_dir);
     let index_file = index_path.join("index.json");
@@ -890,10 +1007,52 @@ pub async fn search(
     Ok(serde_json::to_value(results).unwrap())
 }
 
-/// Get summary of clusters (stub)
+/// Get summary of clusters
 #[tauri::command(rename_all = "camelCase")]
 pub async fn get_clusters_summary(index_dir: String) -> Result<serde_json::Value, String> {
-    Ok(serde_json::json!([]))
+    let index_path = Path::new(&index_dir);
+    let clusters_file = index_path.join("clusters.json");
+    
+    if !clusters_file.exists() {
+        return Ok(serde_json::json!({
+            "clusters": [],
+            "message": "No clusters found. Please create clusters first."
+        }));
+    }
+    
+    let content = fs::read_to_string(&clusters_file)
+        .map_err(|e| format!("Failed to read clusters file: {}", e))?;
+    
+    let clusters_data: ClustersData = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse clusters: {}", e))?;
+    
+    // Transform clusters for frontend display
+    let clusters_summary: Vec<serde_json::Value> = clusters_data.clusters.iter().map(|cluster| {
+        // Extract file names from paths for display
+        let files: Vec<serde_json::Value> = cluster.file_paths.iter().map(|path| {
+            let name = Path::new(path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.clone());
+            serde_json::json!({
+                "name": name,
+                "path": path
+            })
+        }).collect();
+        
+        serde_json::json!({
+            "id": cluster.id,
+            "label": cluster.label.clone().unwrap_or_else(|| format!("Cluster {}", cluster.id + 1)),
+            "file_count": cluster.file_paths.len(),
+            "files": files
+        })
+    }).collect();
+    
+    Ok(serde_json::json!({
+        "clusters": clusters_summary,
+        "created_at": clusters_data.created_at,
+        "total_clusters": clusters_summary.len()
+    }))
 }
 
 /// Get timeline of file modifications
@@ -963,6 +1122,8 @@ pub async fn get_timeline(index_dir: String, days: usize) -> Result<serde_json::
 pub async fn get_stats(index_dir: String) -> Result<serde_json::Value, String> {
     let index_path = Path::new(&index_dir);
     let index_file = index_path.join("index.json");
+    let embeddings_file = index_path.join("embeddings.json");
+    let clusters_file = index_path.join("clusters.json");
     
     if !index_file.exists() {
         return Err("Index not found".to_string());
@@ -982,12 +1143,46 @@ pub async fn get_stats(index_dir: String) -> Result<serde_json::Value, String> {
         *extensions.entry(file.extension.clone()).or_insert(0) += 1;
     }
 
+    // Check embeddings
+    let (has_embeddings, embedding_count) = if embeddings_file.exists() {
+        if let Ok(emb_content) = fs::read_to_string(&embeddings_file) {
+            if let Ok(emb_data) = serde_json::from_str::<EmbeddingsData>(&emb_content) {
+                (!emb_data.embeddings.is_empty(), emb_data.embeddings.len())
+            } else {
+                (false, 0)
+            }
+        } else {
+            (false, 0)
+        }
+    } else {
+        (false, 0)
+    };
+
+    // Check clusters
+    let (has_clusters, cluster_count) = if clusters_file.exists() {
+        if let Ok(clust_content) = fs::read_to_string(&clusters_file) {
+            if let Ok(clust_data) = serde_json::from_str::<ClustersData>(&clust_content) {
+                (!clust_data.clusters.is_empty(), clust_data.clusters.len())
+            } else {
+                (false, 0)
+            }
+        } else {
+            (false, 0)
+        }
+    } else {
+        (false, 0)
+    };
+
     Ok(serde_json::json!({
         "total_files": index_data.files.len(),
         "total_size_bytes": total_size,
         "extensions": extensions,
         "last_updated": index_data.created_at,
-        "scan_path": index_data.scan_path
+        "scan_path": index_data.scan_path,
+        "has_embeddings": has_embeddings,
+        "embedding_count": embedding_count,
+        "has_clusters": has_clusters,
+        "cluster_count": cluster_count
     }))
 }
 

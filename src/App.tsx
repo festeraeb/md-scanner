@@ -103,6 +103,22 @@ export default function App() {
         }
     }, [activeSection, indexPath]);
 
+    // Poll for stats updates when operations are running or on status page
+    useEffect(() => {
+        if (!indexPath) return;
+        
+        const isOperationRunning = embedStatus === "running" || clusterStatus === "running" || scanStatus === "running";
+        const pollInterval = isOperationRunning ? 2000 : (activeSection === "status" ? 5000 : 0);
+        
+        if (pollInterval === 0) return;
+        
+        const interval = setInterval(() => {
+            loadStats();
+        }, pollInterval);
+        
+        return () => clearInterval(interval);
+    }, [indexPath, embedStatus, clusterStatus, scanStatus, activeSection]);
+
     // Toggle file type selection
     const toggleFileType = (type: string) => {
         setSelectedTypes(prev =>
