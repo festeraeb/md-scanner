@@ -127,6 +127,7 @@ export const GitAssistant: React.FC<Props> = ({ repoPath, indexPath }) => {
 
     const getUrgencyColor = (level: string) => {
         switch (level) {
+            case 'existential_crisis': return '#9b59b6';
             case 'panic': return '#e74c3c';
             case 'warning': return '#f39c12';
             case 'nudge': return '#3498db';
@@ -136,10 +137,21 @@ export const GitAssistant: React.FC<Props> = ({ repoPath, indexPath }) => {
 
     const getUrgencyEmoji = (level: string) => {
         switch (level) {
+            case 'existential_crisis': return '😰';
             case 'panic': return '🚨';
             case 'warning': return '⚠️';
             case 'nudge': return '💡';
             default: return '✨';
+        }
+    };
+
+    const getUrgencyLabel = (level: string) => {
+        switch (level) {
+            case 'existential_crisis': return 'HELP';
+            case 'panic': return 'PANIC';
+            case 'warning': return 'Warning';
+            case 'nudge': return 'Nudge';
+            default: return 'All Good';
         }
     };
 
@@ -211,10 +223,24 @@ export const GitAssistant: React.FC<Props> = ({ repoPath, indexPath }) => {
             )}
 
             {/* Header with Clippy message */}
-            <div className="clippy-header" style={{ borderLeftColor: getUrgencyColor(report.urgency_level) }}>
+            <div className={`clippy-header urgency-${report.urgency_level}`} style={{ borderLeftColor: getUrgencyColor(report.urgency_level) }}>
                 <span className="clippy-icon">{getUrgencyEmoji(report.urgency_level)}</span>
                 <div className="clippy-message">
-                    <p>{report.message}</p>
+                    <p style={{ whiteSpace: 'pre-line' }}>{report.message}</p>
+                    {report.urgency_level === 'existential_crisis' || report.urgency_level === 'panic' ? (
+                        <span className="urgency-badge" style={{
+                            background: getUrgencyColor(report.urgency_level),
+                            color: 'white',
+                            padding: '4px 8px',
+                            borderRadius: '4px',
+                            fontSize: '12px',
+                            fontWeight: 'bold',
+                            marginTop: '8px',
+                            display: 'inline-block'
+                        }}>
+                            {getUrgencyLabel(report.urgency_level)}
+                        </span>
+                    ) : null}
                 </div>
             </div>
 

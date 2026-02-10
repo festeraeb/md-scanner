@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { tauriService } from "../services/tauri";
 import * as Types from "../types";
 import "../styles/learning-mode.css";

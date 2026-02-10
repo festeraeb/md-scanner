@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { tauriService } from "./services/tauri";
 import { useTheme } from "./hooks/useTauri";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -33,11 +33,12 @@ interface IndexStats {
     total_size_bytes: number;
     extensions: Record<string, number>;
     last_updated: string;
-    scan_path: string;
+    scan_path?: string;
     // These will be false until we implement embeddings/clustering
     has_embeddings?: boolean;
     has_clusters?: boolean;
     cluster_count?: number;
+    embeddings_count?: number;
 }
 
 export default function App() {

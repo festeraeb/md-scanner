@@ -101,6 +101,91 @@ pub struct SystemInfo {
     pub arch: String,
 }
 
+// Error logging structure
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ErrorLogEntry {
+    pub timestamp: String,
+    pub operation: String,
+    pub file_path: Option<String>,
+    pub error_message: String,
+    pub error_code: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct ErrorLog {
+    pub entries: Vec<ErrorLogEntry>,
+    pub last_updated: String,
+}
+
+// Batch processing progress
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BatchProgress {
+    pub batch_id: String,
+    pub total_files: usize,
+    pub processed_files: usize,
+    pub current_batch: usize,
+    pub total_batches: usize,
+    pub batch_size: usize,
+    pub status: String,  // "running", "paused", "complete", "error"
+    pub started_at: String,
+    pub last_updated: String,
+    pub errors: Vec<String>,
+}
+
+// Embedding job configuration
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct EmbeddingJobConfig {
+    pub batch_size: usize,        // Files per batch (default: 100)
+    pub delay_ms: u64,            // Delay between requests (default: 50)
+    pub max_retries: usize,       // Max retries per file (default: 3)
+    pub save_interval: usize,     // Save progress every N files (default: 50)
+    pub max_files: Option<usize>, // Limit total files (for testing)
+}
+
+impl Default for EmbeddingJobConfig {
+    fn default() -> Self {
+        Self {
+            batch_size: 100,
+            delay_ms: 50,
+            max_retries: 3,
+            save_interval: 50,
+            max_files: None,
+        }
+    }
+}
+
+// Helper to log errors to file
+fn log_error(index_dir: &Path, operation: &str, file_path: Option<&str>, error_message: &str, error_code: Option<&str>) {
+    let error_log_file = index_dir.join("error_log.json");
+    
+    let mut error_log: ErrorLog = if error_log_file.exists() {
+        fs::read_to_string(&error_log_file)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    } else {
+        ErrorLog::default()
+    };
+    
+    error_log.entries.push(ErrorLogEntry {
+        timestamp: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        operation: operation.to_string(),
+        file_path: file_path.map(|s| s.to_string()),
+        error_message: error_message.to_string(),
+        error_code: error_code.map(|s| s.to_string()),
+    });
+    error_log.last_updated = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    
+    // Keep only last 1000 errors
+    if error_log.entries.len() > 1000 {
+        error_log.entries = error_log.entries.split_off(error_log.entries.len() - 1000);
+    }
+    
+    if let Ok(json) = serde_json::to_string_pretty(&error_log) {
+        let _ = fs::write(&error_log_file, json);
+    }
+}
+
 // Pure Rust command handlers - no Python dependency
 
 /// Scan a directory and create an index of text files
@@ -212,15 +297,21 @@ pub async fn scan_directory(path: String, index_dir: String) -> Result<serde_jso
     }))
 }
 
-/// Generate embeddings using Azure OpenAI
+/// Generate embeddings using Azure OpenAI with auto-batching and progress saving
 #[tauri::command(rename_all = "camelCase")]
-pub async fn generate_embeddings(index_dir: String) -> Result<serde_json::Value, String> {
+pub async fn generate_embeddings(index_dir: String, max_files: Option<usize>, batch_size: Option<usize>) -> Result<serde_json::Value, String> {
     println!("[RUST] generate_embeddings called for: {}", index_dir);
     
     let index_path = Path::new(&index_dir);
     let index_file = index_path.join("index.json");
     let config_file = index_path.join("azure_config.json");
     let embeddings_file = index_path.join("embeddings.json");
+    let progress_file = index_path.join("embedding_progress.json");
+    
+    // Configuration
+    let config_batch_size = batch_size.unwrap_or(100);
+    let save_interval = 50; // Save every 50 files
+    let delay_ms = 50; // 50ms delay between requests
     
     // Check if index exists
     if !index_file.exists() {
@@ -247,11 +338,24 @@ pub async fn generate_embeddings(index_dir: String) -> Result<serde_json::Value,
     let index_data: IndexData = serde_json::from_str(&index_content)
         .map_err(|e| format!("Failed to parse index: {}", e))?;
     
-    // Load existing embeddings if any
+    // Apply max_files limit if specified
+    let files_to_process: Vec<FileEntry> = if let Some(max) = max_files {
+        index_data.files.into_iter().take(max).collect()
+    } else {
+        index_data.files
+    };
+    
+    let total_files = files_to_process.len();
+    let total_batches = (total_files + config_batch_size - 1) / config_batch_size;
+    
+    println!("[RUST] Processing {} files in {} batches of {}", total_files, total_batches, config_batch_size);
+    
+    // Load existing embeddings (for caching and resuming)
     let mut existing_embeddings: HashMap<String, FileEmbedding> = HashMap::new();
     if embeddings_file.exists() {
         if let Ok(content) = fs::read_to_string(&embeddings_file) {
             if let Ok(data) = serde_json::from_str::<EmbeddingsData>(&content) {
+                println!("[RUST] Loaded {} existing embeddings from cache", data.embeddings.len());
                 for emb in data.embeddings {
                     existing_embeddings.insert(emb.path.clone(), emb);
                 }
@@ -259,11 +363,18 @@ pub async fn generate_embeddings(index_dir: String) -> Result<serde_json::Value,
         }
     }
     
-    let client = reqwest::Client::new();
-    let mut new_embeddings: Vec<FileEmbedding> = Vec::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let mut new_embeddings: Vec<FileEmbedding> = existing_embeddings.values().cloned().collect();
+    let processed_paths: std::collections::HashSet<String> = existing_embeddings.keys().cloned().collect();
+    
     let mut cached_count = 0;
     let mut generated_count = 0;
     let mut error_count = 0;
+    let mut skipped_count = 0;
     
     let api_version = if config.api_version.is_empty() { 
         "2024-02-01".to_string() 
@@ -280,84 +391,157 @@ pub async fn generate_embeddings(index_dir: String) -> Result<serde_json::Value,
     
     println!("[RUST] Embedding API URL: {}", url);
     
-    for (i, file) in index_data.files.iter().enumerate() {
+    // Initialize progress
+    let mut progress = BatchProgress {
+        batch_id: format!("{}", Local::now().timestamp()),
+        total_files,
+        processed_files: 0,
+        current_batch: 0,
+        total_batches,
+        batch_size: config_batch_size,
+        status: "running".to_string(),
+        started_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        last_updated: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        errors: Vec::new(),
+    };
+    
+    // Save initial progress
+    let _ = fs::write(&progress_file, serde_json::to_string_pretty(&progress).unwrap_or_default());
+    
+    for (i, file) in files_to_process.iter().enumerate() {
+        // Skip if already processed
+        if processed_paths.contains(&file.path) {
+            cached_count += 1;
+            continue;
+        }
+        
         // Read file content
         let content = match fs::read_to_string(&file.path) {
             Ok(c) => c,
-            Err(_) => continue, // Skip files that can't be read
+            Err(e) => {
+                skipped_count += 1;
+                log_error(&index_path, "read_file", Some(&file.path), &e.to_string(), None);
+                continue;
+            }
         };
+        
+        // Skip empty files
+        if content.trim().is_empty() {
+            skipped_count += 1;
+            continue;
+        }
         
         // Simple hash of content for caching
         let content_hash = format!("{:x}", md5_hash(&content));
         
-        // Check if we already have this embedding
-        if let Some(existing) = existing_embeddings.get(&file.path) {
-            if existing.content_hash == content_hash {
-                new_embeddings.push(existing.clone());
-                cached_count += 1;
-                continue;
-            }
-        }
-        
-        // Truncate content to ~8000 tokens (roughly 32000 chars for ada-002)
+        // Truncate content to ~8000 tokens (roughly 32000 chars)
         let truncated_content = if content.len() > 32000 {
             content[..32000].to_string()
         } else {
             content.clone()
         };
         
-        // Call Azure OpenAI
+        // Call Azure OpenAI with retry logic
         let request_body = serde_json::json!({
             "input": truncated_content
         });
         
-        match client
-            .post(&url)
-            .header("api-key", &config.api_key)
-            .header("Content-Type", "application/json")
-            .json(&request_body)
-            .send()
-            .await
-        {
-            Ok(response) => {
-                if response.status().is_success() {
-                    if let Ok(json) = response.json::<serde_json::Value>().await {
-                        if let Some(embedding) = json["data"][0]["embedding"].as_array() {
-                            let emb_vec: Vec<f32> = embedding
-                                .iter()
-                                .filter_map(|v| v.as_f64().map(|f| f as f32))
-                                .collect();
-                            
-                            new_embeddings.push(FileEmbedding {
-                                path: file.path.clone(),
-                                embedding: emb_vec,
-                                content_hash,
-                            });
-                            generated_count += 1;
-                            
-                            if (i + 1) % 10 == 0 {
-                                println!("[RUST] Progress: {}/{} files processed", i + 1, index_data.files.len());
+        let mut retries = 0;
+        let max_retries = 3;
+        let mut success = false;
+        
+        while retries < max_retries && !success {
+            match client
+                .post(&url)
+                .header("api-key", &config.api_key)
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
+                .await
+            {
+                Ok(response) => {
+                    if response.status().is_success() {
+                        if let Ok(json) = response.json::<serde_json::Value>().await {
+                            if let Some(embedding) = json["data"][0]["embedding"].as_array() {
+                                let emb_vec: Vec<f32> = embedding
+                                    .iter()
+                                    .filter_map(|v| v.as_f64().map(|f| f as f32))
+                                    .collect();
+                                
+                                new_embeddings.push(FileEmbedding {
+                                    path: file.path.clone(),
+                                    embedding: emb_vec,
+                                    content_hash: content_hash.clone(),
+                                });
+                                generated_count += 1;
+                                success = true;
                             }
                         }
+                    } else if response.status().as_u16() == 429 {
+                        // Rate limited - wait and retry
+                        let wait_time = 2u64.pow(retries as u32) * 1000;
+                        println!("[RUST] Rate limited, waiting {}ms...", wait_time);
+                        log_error(&index_path, "rate_limit", Some(&file.path), "Rate limited by Azure", Some("429"));
+                        tokio::time::sleep(tokio::time::Duration::from_millis(wait_time)).await;
+                        retries += 1;
+                    } else {
+                        let status = response.status();
+                        let error_text = response.text().await.unwrap_or_default();
+                        log_error(&index_path, "api_error", Some(&file.path), &error_text, Some(&status.to_string()));
+                        error_count += 1;
+                        progress.errors.push(format!("{}: {} - {}", file.name, status, error_text));
+                        break;
                     }
-                } else {
-                    let status = response.status();
-                    let error_text = response.text().await.unwrap_or_default();
-                    println!("[RUST] API error for {}: {} - {}", file.name, status, error_text);
-                    error_count += 1;
                 }
-            }
-            Err(e) => {
-                println!("[RUST] Request error for {}: {}", file.name, e);
-                error_count += 1;
+                Err(e) => {
+                    if retries < max_retries - 1 {
+                        let wait_time = 2u64.pow(retries as u32) * 500;
+                        tokio::time::sleep(tokio::time::Duration::from_millis(wait_time)).await;
+                        retries += 1;
+                    } else {
+                        log_error(&index_path, "request_error", Some(&file.path), &e.to_string(), None);
+                        error_count += 1;
+                        progress.errors.push(format!("{}: {}", file.name, e));
+                        break;
+                    }
+                }
             }
         }
         
-        // Small delay to avoid rate limiting
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        // Update progress
+        progress.processed_files = i + 1;
+        progress.current_batch = (i / config_batch_size) + 1;
+        progress.last_updated = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        
+        // Log and save progress periodically
+        if (i + 1) % save_interval == 0 || i == total_files - 1 {
+            println!("[RUST] Progress: {}/{} files ({} generated, {} cached, {} errors)", 
+                i + 1, total_files, generated_count, cached_count, error_count);
+            
+            // Save progress file
+            let _ = fs::write(&progress_file, serde_json::to_string_pretty(&progress).unwrap_or_default());
+            
+            // Save embeddings periodically
+            let embeddings_data = EmbeddingsData {
+                embeddings: new_embeddings.clone(),
+                model: config.deployment_name.clone(),
+                created_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            };
+            
+            if let Ok(json) = serde_json::to_string_pretty(&embeddings_data) {
+                let _ = fs::write(&embeddings_file, json);
+            }
+        }
+        
+        // Delay between requests
+        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
     }
     
-    // Save embeddings
+    // Final save
+    progress.status = "complete".to_string();
+    progress.last_updated = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let _ = fs::write(&progress_file, serde_json::to_string_pretty(&progress).unwrap_or_default());
+    
     let embeddings_data = EmbeddingsData {
         embeddings: new_embeddings.clone(),
         model: config.deployment_name.clone(),
@@ -370,15 +554,81 @@ pub async fn generate_embeddings(index_dir: String) -> Result<serde_json::Value,
     fs::write(&embeddings_file, json)
         .map_err(|e| format!("Failed to write embeddings file: {}", e))?;
     
-    println!("[RUST] Embeddings complete: {} generated, {} cached, {} errors", 
-        generated_count, cached_count, error_count);
+    println!("[RUST] Embeddings complete: {} generated, {} cached, {} skipped, {} errors", 
+        generated_count, cached_count, skipped_count, error_count);
     
     Ok(serde_json::json!({
         "embeddings_generated": generated_count,
         "cached_count": cached_count,
+        "skipped_count": skipped_count,
         "error_count": error_count,
         "total_files": new_embeddings.len(),
-        "message": format!("Generated {} new embeddings, {} from cache", generated_count, cached_count)
+        "message": format!("Generated {} new embeddings, {} from cache, {} skipped, {} errors", 
+            generated_count, cached_count, skipped_count, error_count)
+    }))
+}
+
+/// Get embedding progress
+#[tauri::command(rename_all = "camelCase")]
+pub async fn get_embedding_progress(index_dir: String) -> Result<serde_json::Value, String> {
+    let progress_file = Path::new(&index_dir).join("embedding_progress.json");
+    
+    if !progress_file.exists() {
+        return Ok(serde_json::json!({
+            "status": "not_started",
+            "message": "No embedding job has been started"
+        }));
+    }
+    
+    let content = fs::read_to_string(&progress_file)
+        .map_err(|e| format!("Failed to read progress file: {}", e))?;
+    
+    let progress: BatchProgress = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse progress file: {}", e))?;
+    
+    Ok(serde_json::to_value(&progress).unwrap_or_default())
+}
+
+/// Get error log
+#[tauri::command(rename_all = "camelCase")]
+pub async fn get_error_log(index_dir: String, limit: Option<usize>) -> Result<serde_json::Value, String> {
+    let error_log_file = Path::new(&index_dir).join("error_log.json");
+    
+    if !error_log_file.exists() {
+        return Ok(serde_json::json!({
+            "entries": [],
+            "message": "No errors logged"
+        }));
+    }
+    
+    let content = fs::read_to_string(&error_log_file)
+        .map_err(|e| format!("Failed to read error log: {}", e))?;
+    
+    let mut error_log: ErrorLog = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse error log: {}", e))?;
+    
+    // Apply limit
+    let limit = limit.unwrap_or(100);
+    if error_log.entries.len() > limit {
+        error_log.entries = error_log.entries.split_off(error_log.entries.len() - limit);
+    }
+    
+    Ok(serde_json::to_value(&error_log).unwrap_or_default())
+}
+
+/// Clear error log
+#[tauri::command(rename_all = "camelCase")]
+pub async fn clear_error_log(index_dir: String) -> Result<serde_json::Value, String> {
+    let error_log_file = Path::new(&index_dir).join("error_log.json");
+    
+    if error_log_file.exists() {
+        fs::remove_file(&error_log_file)
+            .map_err(|e| format!("Failed to delete error log: {}", e))?;
+    }
+    
+    Ok(serde_json::json!({
+        "success": true,
+        "message": "Error log cleared"
     }))
 }
 

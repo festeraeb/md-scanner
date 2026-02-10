@@ -5,6 +5,13 @@
     gap: 20px;
 }
 
+/* Gold Clippy Theme */
+.clippy-gold {
+    --clippy-gold: #FFD700;
+    --clippy-gold-light: #FFE55C;
+    --clippy-gold-dark: #D4AF37;
+    --clippy-shine: linear-gradient(135deg, #FFE55C 0%, #FFD700 25%, #D4AF37 50%, #FFD700 75%, #FFE55C 100%);
+}
 .git-not-configured,
 .git-loading,
 .git-error,
@@ -23,6 +30,27 @@
 .clippy-icon {
     font-size: 48px;
     margin-bottom: 16px;
+    filter: drop-shadow(0 0 10px rgba(255, 215, 0, 0.6));
+        animation: shimmer 2s ease-in-out infinite;
+    }
+    
+    .clippy-icon.gold {
+        background: linear-gradient(135deg, #FFE55C 0%, #FFD700 50%, #D4AF37 100%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        text-shadow: 0 0 20px rgba(255, 215, 0, 0.8), 0 0 40px rgba(255, 215, 0, 0.4);
+    }
+    
+    @keyframes shimmer {
+    
+        0%,
+        100% {
+            filter: drop-shadow(0 0 10px rgba(255, 215, 0, 0.6));
+        }
+    
+        50% {
+            filter: drop-shadow(0 0 20px rgba(255, 215, 0, 0.9)) brightness(1.2);
+        }
 }
 
 .clippy-icon.spinning {
@@ -47,20 +75,49 @@
     margin: 8px 0;
 }
 
-/* Clippy Header */
+/* Clippy Header - Now with Gold Shine! */
 .clippy-header {
     display: flex;
     align-items: center;
     gap: 16px;
     padding: 16px 20px;
-    background: var(--card-bg, #1e1e1e);
+    background: linear-gradient(135deg, rgba(255, 215, 0, 0.1) 0%, var(--card-bg, #1e1e1e) 50%, rgba(255, 215, 0, 0.05) 100%);
     border-radius: 12px;
-    border-left: 4px solid;
+    border-left: 4px solid #FFD700;
+        box-shadow: 0 0 20px rgba(255, 215, 0, 0.15), inset 0 1px 0 rgba(255, 215, 0, 0.1);
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .clippy-header::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        left: -50%;
+        width: 200%;
+        height: 200%;
+        background: linear-gradient(45deg,
+                transparent 30%,
+                rgba(255, 215, 0, 0.1) 50%,
+                transparent 70%);
+        animation: shine 3s ease-in-out infinite;
+    }
+    
+    @keyframes shine {
+        0% {
+            transform: translateX(-100%) rotate(45deg);
+        }
+    
+        100% {
+            transform: translateX(100%) rotate(45deg);
+        }
 }
 
 .clippy-header .clippy-icon {
     font-size: 32px;
     margin-bottom: 0;
+    position: relative;
+        z-index: 1;
 }
 
 .clippy-message p {
@@ -68,6 +125,8 @@
     font-size: 14px;
     line-height: 1.5;
     color: var(--text-primary, #fff);
+    position: relative;
+        z-index: 1;
 }
 
 /* Stats */
@@ -139,6 +198,69 @@
     border-left: 3px solid #3498db;
 }
 
+/* High priority suggestions - panic mode */
+.suggestion.priority-4,
+.suggestion.priority-5 {
+    border-left: 4px solid #e74c3c;
+    background: rgba(231, 76, 60, 0.1);
+}
+
+/* Merge/rebase in progress - critical */
+.suggestion.priority-8,
+.suggestion.priority-9,
+.suggestion.priority-10 {
+    border-left: 4px solid #9b59b6;
+    background: linear-gradient(135deg, rgba(155, 89, 182, 0.1) 0%, var(--card-bg, #1e1e1e) 100%);
+    animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+
+    0%,
+    100% {
+        box-shadow: 0 0 0 0 rgba(155, 89, 182, 0.4);
+    }
+
+    50% {
+        box-shadow: 0 0 20px 5px rgba(155, 89, 182, 0.2);
+    }
+}
+
+/* Urgency header variations */
+.clippy-header.urgency-existential_crisis {
+    border-left-color: #9b59b6;
+    background: linear-gradient(135deg, rgba(155, 89, 182, 0.15) 0%, var(--card-bg, #1e1e1e) 50%, rgba(155, 89, 182, 0.05) 100%);
+    animation: crisis-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes crisis-pulse {
+
+    0%,
+    100% {
+        box-shadow: 0 0 20px rgba(155, 89, 182, 0.3);
+    }
+
+    50% {
+        box-shadow: 0 0 40px rgba(155, 89, 182, 0.5), 0 0 60px rgba(155, 89, 182, 0.2);
+    }
+}
+
+.clippy-header.urgency-panic {
+    border-left-color: #e74c3c;
+    background: linear-gradient(135deg, rgba(231, 76, 60, 0.1) 0%, var(--card-bg, #1e1e1e) 50%);
+}
+
+.clippy-header.urgency-warning {
+    border-left-color: #f39c12;
+}
+
+.clippy-header.urgency-nudge {
+    border-left-color: #3498db;
+}
+
+.clippy-header.urgency-chill {
+    border-left-color: #2ecc71;
+}
 .suggestion:hover {
     border-color: var(--accent-color, #4dabf7);
 }

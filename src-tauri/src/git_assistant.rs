@@ -217,10 +217,12 @@ pub fn detect_copy_patterns(files: &[FileEntry]) -> Vec<FileSuggestion> {
     let copy_patterns = [
         "_copy", "_backup", "_old", "_new", "_working", "_temp", "_COPY", "_BACKUP", "_OLD",
         "_NEW", "_WORKING", "_TEMP", " copy", " Copy", " (copy)", " - Copy", "_v1", "_v2", "_v3",
-        "_final", "_FINAL",
+        "_v4", "_v5", "_final", "_FINAL", "_final_v2", "_ACTUAL", "_ACTUAL_working", "_no_really",
+        "_this_one_works", "_latest", "_LATEST",
     ];
 
     let mut suggestions: Vec<FileSuggestion> = Vec::new();
+    let mut pattern_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
 
     for file in files {
         let name = &file.name;
@@ -230,18 +232,27 @@ pub fn detect_copy_patterns(files: &[FileEntry]) -> Vec<FileSuggestion> {
             .unwrap_or("");
 
         for pattern in &copy_patterns {
-            if stem.contains(pattern) {
+            if stem.to_lowercase().contains(&pattern.to_lowercase()) {
+                *pattern_counts.entry((*pattern).to_string()).or_insert(0) += 1;
+                
                 let potential_original = stem.replace(pattern, "");
                 let ext = Path::new(name)
                     .extension()
                     .and_then(|s| s.to_str())
                     .unwrap_or("");
 
+                let snarky_reason = match pattern_counts.get(*pattern).unwrap_or(&1) {
+                    1..=3 => format!("Contains '{}' pattern", pattern),
+                    4..=10 => format!("Another '{}' file? There's {} of them now...", pattern, pattern_counts.get(*pattern).unwrap_or(&1)),
+                    11..=20 => format!("This is the {}th file with '{}'. Maybe we should talk about your branching strategy?", pattern_counts.get(*pattern).unwrap_or(&1), pattern),
+                    _ => format!("{}th file with '{}' in the name. At this point it's a collection. 📋📋📋", pattern_counts.get(*pattern).unwrap_or(&1), pattern),
+                };
+
                 suggestions.push(FileSuggestion {
                     file_path: file.path.clone(),
                     suggestion: format!("Looks like a copy of '{}.{}'", potential_original, ext),
                     action: "review".to_string(),
-                    reason: format!("Contains '{}' pattern", pattern),
+                    reason: snarky_reason,
                 });
                 break;
             }
@@ -348,13 +359,41 @@ pub fn generate_clippy_report(
     let mut duplicates: Vec<DuplicateFile> = Vec::new();
 
     // Check uncommitted files
-    if status.uncommitted_files > 50 {
+    if status.uncommitted_files > 200 {
+        suggestions.push(ClippySuggestion {
+            id: "extreme_uncommitted".to_string(),
+            icon: "🚨".to_string(),
+            title: format!("{} modified files in working directory", status.uncommitted_files),
+            description: format!(
+                "📎 \"I notice you haven't committed in {} days.\n    Your working directory has {} modified files.\n    Should I...\"",
+                status.days_since_commit, status.uncommitted_files
+            ),
+            actions: vec![
+                ClippyAction {
+                    label: "Commit everything".to_string(),
+                    action_type: "wip_commit".to_string(),
+                    data: None,
+                },
+                ClippyAction {
+                    label: "Create panic backup".to_string(),
+                    action_type: "panic_backup".to_string(),
+                    data: None,
+                },
+                ClippyAction {
+                    label: "Cry".to_string(),
+                    action_type: "cry".to_string(),
+                    data: None,
+                },
+            ],
+            priority: 10,
+        });
+    } else if status.uncommitted_files > 50 {
         suggestions.push(ClippySuggestion {
             id: "many_uncommitted".to_string(),
             icon: "⚠️".to_string(),
             title: format!("{} uncommitted files", status.uncommitted_files),
             description:
-                "That's a lot of changes. Your future self might thank you for committing."
+                "That's a lot of changes. Your future self might thank you for committing. Or at least making a backup before Claude starts making copies..."
                     .to_string(),
             actions: vec![
                 ClippyAction {
@@ -475,7 +514,35 @@ pub fn generate_clippy_report(
         }
 
         let copy_suggestions = detect_copy_patterns(files);
-        if copy_suggestions.len() > 3 {
+        if copy_suggestions.len() > 10 {
+            suggestions.push(ClippySuggestion {
+                id: "copy_patterns_extreme".to_string(),
+                icon: "📋".to_string(),
+                title: format!("You just created your {}th file with 'copy' in the name", copy_suggestions.len()),
+                description: format!(
+                    "📎 \"This is the {}th file with 'copy' in the name.\n    Maybe we should talk about your branching strategy?\"\n\nFound: _copy, _backup, _final, _v2, _ACTUAL_working...",
+                    copy_suggestions.len()
+                ),
+                actions: vec![
+                    ClippyAction {
+                        label: "Review them".to_string(),
+                        action_type: "show_copies".to_string(),
+                        data: None,
+                    },
+                    ClippyAction {
+                        label: "Learn about git branches".to_string(),
+                        action_type: "learn_branches".to_string(),
+                        data: None,
+                    },
+                    ClippyAction {
+                        label: "I'm a hoarder, leave them".to_string(),
+                        action_type: "dismiss".to_string(),
+                        data: None,
+                    },
+                ],
+                priority: 4,
+            });
+        } else if copy_suggestions.len() > 3 {
             suggestions.push(ClippySuggestion {
                 id: "copy_patterns".to_string(),
                 icon: "📋".to_string(),
@@ -524,11 +591,68 @@ pub fn generate_clippy_report(
         });
     }
 
+    // Check for merge conflicts or merge in progress
+    let merge_head = Path::new(repo_path).join(".git").join("MERGE_HEAD");
+    if merge_head.exists() {
+        suggestions.push(ClippySuggestion {
+            id: "merge_in_progress".to_string(),
+            icon: "🏃".to_string(),
+            title: "It looks like you're trying to merge!".to_string(),
+            description: "📎 \"It looks like you're trying to merge!\n    Just kidding, I'm backing away slowly.\n    You're on your own with this one. Good luck! 🏃\"\n\n(But seriously, finish the merge or abort it)".to_string(),
+            actions: vec![
+                ClippyAction {
+                    label: "I know what I'm doing".to_string(),
+                    action_type: "dismiss".to_string(),
+                    data: None,
+                },
+                ClippyAction {
+                    label: "Abort merge".to_string(),
+                    action_type: "abort_merge".to_string(),
+                    data: None,
+                },
+                ClippyAction {
+                    label: "Pray".to_string(),
+                    action_type: "pray".to_string(),
+                    data: None,
+                },
+            ],
+            priority: 8,
+        });
+    }
+
+    // Check for rebase in progress
+    let rebase_merge = Path::new(repo_path).join(".git").join("rebase-merge");
+    let rebase_apply = Path::new(repo_path).join(".git").join("rebase-apply");
+    if rebase_merge.exists() || rebase_apply.exists() {
+        suggestions.push(ClippySuggestion {
+            id: "rebase_in_progress".to_string(),
+            icon: "🎢".to_string(),
+            title: "Rebase in progress".to_string(),
+            description: "You started a rebase. No pressure, but you should probably finish it before doing anything else.".to_string(),
+            actions: vec![
+                ClippyAction {
+                    label: "Continue rebase".to_string(),
+                    action_type: "rebase_continue".to_string(),
+                    data: None,
+                },
+                ClippyAction {
+                    label: "Abort rebase".to_string(),
+                    action_type: "rebase_abort".to_string(),
+                    data: None,
+                },
+            ],
+            priority: 9,
+        });
+    }
+
     let commit_suggestions = suggest_commits(repo_path).unwrap_or_default();
 
     suggestions.sort_by(|a, b| b.priority.cmp(&a.priority));
 
-    let urgency_level = if status.days_since_commit > 7 && status.uncommitted_files > 50 {
+    // Enhanced urgency levels
+    let urgency_level = if status.days_since_commit > 7 && status.uncommitted_files > 200 {
+        "existential_crisis"
+    } else if status.days_since_commit > 7 && status.uncommitted_files > 50 {
         "panic"
     } else if status.days_since_commit > 3 || status.uncommitted_files > 20 {
         "warning"
@@ -539,10 +663,17 @@ pub fn generate_clippy_report(
     };
 
     let message = match urgency_level {
-        "panic" => "📎 Oh dear. We should probably talk about your commit habits...".to_string(),
-        "warning" => "📎 Hey! Just checking in. Things are getting a bit messy.".to_string(),
+        "existential_crisis" => format!(
+            "📎 Oh no. {} days and {} files.\n    At what point do we just backup and start fresh?\n    I'm not judging. I'm just... concerned. 😰",
+            status.days_since_commit, status.uncommitted_files
+        ),
+        "panic" => format!(
+            "📎 \"I notice you haven't committed in {} days.\n    Your working directory has {} modified files.\n    Should I [Commit everything] [Create panic backup] [Cry]?\"",
+            status.days_since_commit, status.uncommitted_files
+        ),
+        "warning" => "📎 Hey! Just checking in. Things are getting a bit messy.\n    Your future self will thank you for committing.".to_string(),
         "nudge" => "📎 Looking good! A few suggestions when you have a moment.".to_string(),
-        _ => "📎 All clear! You're doing great.".to_string(),
+        _ => "📎 All clear! You're doing great. ✨".to_string(),
     };
 
     Ok(GitClippyReport {
@@ -566,6 +697,13 @@ pub fn execute_git_action(
             run_git_command(repo_path, &["add", "-A"])?;
             run_git_command(repo_path, &["commit", "-m", "WIP: Work in progress save"])
         }
+        "panic_backup" => {
+            // Create a timestamped backup branch
+            let backup_name = format!("panic-backup-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"));
+            run_git_command(repo_path, &["add", "-A"])?;
+            run_git_command(repo_path, &["stash", "push", "-m", &format!("Panic backup {}", backup_name)])?;
+            Ok(format!("📎 Created panic backup stash. Use 'git stash list' to see it. Breathe. It's going to be okay. 🫂"))
+        }
         "create_branch" => {
             let branch_name = data
                 .and_then(|d| d.get("name"))
@@ -582,6 +720,24 @@ pub fn execute_git_action(
             run_git_command(repo_path, &["commit", "-m", message])
         }
         "git_init" => run_git_command(repo_path, &["init"]),
+        "abort_merge" => {
+            run_git_command(repo_path, &["merge", "--abort"])?;
+            Ok("📎 Merge aborted. We don't talk about what just happened. 🤫".to_string())
+        }
+        "rebase_continue" => run_git_command(repo_path, &["rebase", "--continue"]),
+        "rebase_abort" => {
+            run_git_command(repo_path, &["rebase", "--abort"])?;
+            Ok("📎 Rebase aborted. Sometimes the bravest thing is to walk away. 🚶".to_string())
+        }
+        "cry" => {
+            Ok("📎 *hands you a tissue* 🤧\n    It's okay. We've all been there.\n    When you're ready, try [Create panic backup].\n    No judgment here.".to_string())
+        }
+        "pray" => {
+            Ok("📎 🙏 Merge gods have been notified.\n    May your conflicts resolve themselves.\n    (They won't, but we can hope)".to_string())
+        }
+        "learn_branches" => {
+            Ok("📎 Quick branching tip:\n\n    git checkout -b feature/my-new-thing\n    <do your experiments>\n    git add -A && git commit -m 'Experiment: my new thing'\n\n    Now you have version control instead of:\n    bag_scanner_copy_final_v2_ACTUAL_working.py 📋".to_string())
+        }
         _ => Err(format!("Unknown action: {}", action)),
     }
 }

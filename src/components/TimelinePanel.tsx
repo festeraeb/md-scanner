@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { tauriService } from "../services/tauri";
 import * as Types from "../types";
 
@@ -40,7 +40,7 @@ export function TimelinePanel({ indexDir }: { indexDir: string }) {
 
                 {loading ? (
                     <p style={{ textAlign: "center", color: "var(--text-secondary)" }}>Loading...</p>
-                ) : timeline && timeline.entries.length > 0 ? (
+                ) : timeline && timeline.entries && timeline.entries.length > 0 ? (
                     <div className="timeline-entries">
                         {timeline.entries.map((entry, idx) => (
                             <div key={idx} className="timeline-entry">
@@ -49,7 +49,7 @@ export function TimelinePanel({ indexDir }: { indexDir: string }) {
                                 {entry.files.length > 0 && (
                                     <ul style={{ fontSize: "var(--font-size-sm)", marginTop: "0.5rem", color: "var(--text-secondary)" }}>
                                         {entry.files.slice(0, 3).map((file, idx) => (
-                                            <li key={idx}>{file}</li>
+                                            <li key={idx}>{typeof file === 'string' ? file : file.name}</li>
                                         ))}
                                         {entry.files.length > 3 && <li>... and {entry.files.length - 3} more</li>}
                                     </ul>

@@ -56,6 +56,8 @@ export interface IndexStats {
     has_embeddings?: boolean;
     has_clusters?: boolean;
     cluster_count?: number;
+    embeddings_count?: number;
+    age_buckets?: AgeBucket[];
 }
 
 export interface AgeBucket {
@@ -72,6 +74,7 @@ export interface IndexState {
 export interface SystemInfo {
     os: string;
     arch: string;
+    device_type?: string;
 }
 
 // Cluster summary response

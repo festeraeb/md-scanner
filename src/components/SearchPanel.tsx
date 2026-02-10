@@ -1,6 +1,5 @@
-import React, { useState, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { tauriService } from "../services/tauri";
-import { useTauriCommand } from "../hooks/useTauri";
 import * as Types from "../types";
 
 export function SearchPanel({ indexDir }: { indexDir: string }) {

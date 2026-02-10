@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { tauriService } from "../services/tauri";
 import * as Types from "../types";
 
@@ -63,11 +63,11 @@ export function StatsPanel({ indexDir }: { indexDir: string }) {
                     <p style={{ textAlign: "center", color: "var(--text-secondary)" }}>No data available</p>
                 )}
 
-                {stats && stats.age_buckets.length > 0 && (
+                {stats && stats.age_buckets && stats.age_buckets.length > 0 && (
                     <div style={{ marginTop: "2rem" }}>
                         <h4>Files by Age</h4>
                         <div className="age-buckets">
-                            {stats.age_buckets.map((bucket, idx) => (
+                            {stats.age_buckets.map((bucket: { label: string; count: number }, idx: number) => (
                                 <div
                                     key={idx}
                                     className="age-bucket"

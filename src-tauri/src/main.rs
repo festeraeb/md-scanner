@@ -23,6 +23,10 @@ fn main() {
             commands::save_azure_config,
             commands::load_azure_config,
             commands::get_clusters_data,
+            // Progress and error tracking
+            commands::get_embedding_progress,
+            commands::get_error_log,
+            commands::clear_error_log,
             // Git Clippy Assistant commands
             commands::get_git_clippy_report,
             commands::execute_clippy_action,

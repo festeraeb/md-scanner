@@ -1,6 +1,5 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { tauriService } from "../services/tauri";
-import * as Types from "../types";
 
 export function ScanPanel({ indexDir }: { indexDir: string }) {
     const [scanPath, setScanPath] = useState("");
