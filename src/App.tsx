@@ -3,6 +3,9 @@ import { tauriService } from "./services/tauri";
 import { useTheme } from "./hooks/useTauri";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GitAssistant } from "./components/GitAssistant";
+import { useFileWatcher } from "./hooks/useFileWatcher";
+import { useNotifications } from "./components/notifications/NotificationProvider";
+import Modal from "./components/Modal";
 import "./styles/global.css";
 import "./styles/app.css";
 import "./styles/panels.css";
@@ -64,12 +67,15 @@ export default function App() {
     const [embedStatus, setEmbedStatus] = useState<OperationStatus>("idle");
     const [embedProgress, setEmbedProgress] = useState(0);
     const [embedResult, setEmbedResult] = useState<any>(null);
+    const [embedMaxFiles, setEmbedMaxFiles] = useState<number | undefined>(undefined);
+    const [embedBatchSize, setEmbedBatchSize] = useState<number | undefined>(undefined);
 
     // Azure config state
     const [azureConfigured, setAzureConfigured] = useState(false);
     const [azureEndpoint, setAzureEndpoint] = useState("");
     const [azureApiKey, setAzureApiKey] = useState("");
     const [azureDeployment, setAzureDeployment] = useState("text-embedding-ada-002");
+    const [azureApiVersion, setAzureApiVersion] = useState("");
     const [showAzureConfig, setShowAzureConfig] = useState(false);
     const [hasExistingKey, setHasExistingKey] = useState(false);
 
@@ -88,6 +94,22 @@ export default function App() {
     const [timelineDays, setTimelineDays] = useState(30);
     const [timelineData, setTimelineData] = useState<any[]>([]);
 
+    // File watcher integration (notifications)
+    // Using hooks and notification provider to surface file events
+    const { active: watcherActive, events: watcherEvents } = useFileWatcher(indexPath);
+    const { notify } = useNotifications();
+
+    // Show toast for new watcher events
+    useEffect(() => {
+        if (!watcherEvents || watcherEvents.length === 0) return;
+        watcherEvents.slice(0,3).forEach((e:any) => {
+            try {
+                notify({ id: `evt-${Date.now()}-${Math.random()}`, title: 'File Event', message: `${e.event}: ${e.path}`, level: 'info', timeout: 8000 });
+            } catch (err) {
+                // ignore if notification system not ready
+            }
+        });
+    }, [watcherEvents]);
     // Error state
     const [errorMsg, setErrorMsg] = useState<string>("");
 
@@ -103,19 +125,36 @@ export default function App() {
         }
     }, [activeSection, indexPath]);
 
-    // Poll for stats updates when operations are running or on status page
+    // Update azureApiVersion when loading config
+    const loadAzureConfig = async (dir: string) => {
+        try {
+            const config = await tauriService.loadAzureConfig(dir);
+            setAzureConfigured(config.configured);
+            setHasExistingKey(config.has_key || false);
+            if (config.endpoint) setAzureEndpoint(config.endpoint);
+            if (config.deployment_name) setAzureDeployment(config.deployment_name);
+            if (config.api_version) setAzureApiVersion(config.api_version);
+            // Clear the key field - we don't return it for security
+            // but show placeholder if key exists
+            setAzureApiKey("");
+        } catch (error) {
+            console.log("No Azure config found");
+            setHasExistingKey(false);
+        }
+    };
+        
     useEffect(() => {
         if (!indexPath) return;
-        
+
         const isOperationRunning = embedStatus === "running" || clusterStatus === "running" || scanStatus === "running";
         const pollInterval = isOperationRunning ? 2000 : (activeSection === "status" ? 5000 : 0);
-        
+
         if (pollInterval === 0) return;
-        
+
         const interval = setInterval(() => {
             loadStats();
         }, pollInterval);
-        
+
         return () => clearInterval(interval);
     }, [indexPath, embedStatus, clusterStatus, scanStatus, activeSection]);
 
@@ -185,24 +224,13 @@ export default function App() {
         }
     };
 
-    // Load Azure config
-    const loadAzureConfig = async (dir: string) => {
-        try {
-            const config = await tauriService.loadAzureConfig(dir);
-            setAzureConfigured(config.configured);
-            setHasExistingKey(config.has_key || false);
-            if (config.endpoint) setAzureEndpoint(config.endpoint);
-            if (config.deployment_name) setAzureDeployment(config.deployment_name);
-            // Clear the key field - we don't return it for security
-            // but show placeholder if key exists
-            setAzureApiKey("");
-        } catch (error) {
-            console.log("No Azure config found");
-            setHasExistingKey(false);
-        }
-    };
+
 
     // Save Azure config
+    const [showValidationModal, setShowValidationModal] = useState(false);
+    const [validationMessage, setValidationMessage] = useState("");
+    const [validationSuggested, setValidationSuggested] = useState<string | null>(null);
+
     const saveAzureConfig = async () => {
         if (!indexPath) {
             setErrorMsg("Please scan a folder first to set the index location");
@@ -219,18 +247,65 @@ export default function App() {
         }
 
         try {
-            await tauriService.saveAzureConfig(
-                indexPath,
-                azureEndpoint,
-                azureApiKey,
-                azureDeployment
-            );
-            setAzureConfigured(true);
-            setShowAzureConfig(false);
-            setErrorMsg("");
+            // Validate configuration before saving
+            const validation = await tauriService.validateAzureConfig(indexPath, azureEndpoint, azureApiKey || "", azureDeployment, azureApiVersion || undefined);
+
+            if (validation && validation.success) {
+                await tauriService.saveAzureConfig(
+                    indexPath,
+                    azureEndpoint,
+                    azureApiKey,
+                    azureDeployment,
+                    azureApiVersion || undefined
+                );
+                setAzureConfigured(true);
+                setShowAzureConfig(false);
+                setErrorMsg("");
+            } else {
+                // Show validation message and offer suggestion if available
+                const msg = validation?.message || "Validation failed";
+                if (validation?.suggested_endpoint) {
+                    // Store suggestion and open modal instead of window.confirm
+                    setValidationMessage(msg + `\nSuggested endpoint: ${validation.suggested_endpoint}`);
+                    setValidationSuggested(validation.suggested_endpoint);
+                    setShowValidationModal(true);
+                } else {
+                    alert(`Validation failed: ${msg}`);
+                    setErrorMsg(msg);
+                }
+            }
         } catch (error: any) {
             setErrorMsg(error.toString());
         }
+    };
+
+    // Confirm modal handlers
+    const applySuggestedEndpoint = async () => {
+        if (!validationSuggested) return;
+        try {
+            await tauriService.saveAzureConfig(
+                indexPath,
+                validationSuggested,
+                azureApiKey,
+                azureDeployment,
+                azureApiVersion || undefined
+            );
+            setAzureEndpoint(validationSuggested);
+            setAzureConfigured(true);
+            setShowAzureConfig(false);
+            setShowValidationModal(false);
+            setValidationSuggested(null);
+            setValidationMessage("");
+            setErrorMsg("");
+        } catch (e: any) {
+            setErrorMsg(e.toString());
+        }
+    };
+
+    const cancelSuggestedEndpoint = () => {
+        setShowValidationModal(false);
+        setValidationSuggested(null);
+        setValidationMessage("");
     };
 
     // Handle embed
@@ -247,12 +322,32 @@ export default function App() {
         }
 
         setEmbedStatus("running");
-        setEmbedProgress(10);
+        setEmbedProgress(0);
         setErrorMsg("");
         setEmbedResult(null);
 
+        // Start polling progress
+        let pollHandle: any = null;
         try {
-            const result = await tauriService.generateEmbeddings(indexPath);
+            pollHandle = setInterval(async () => {
+                try {
+                    const p = await tauriService.getEmbeddingProgress(indexPath);
+                    if (p && p.total_files > 0) {
+                        const percent = Math.round((p.processed_files / Math.max(1, p.total_files)) * 100);
+                        setEmbedProgress(percent);
+                        if (p.status == "complete") {
+                            // finalize
+                            setEmbedProgress(100);
+                            setEmbedStatus("complete");
+                            clearInterval(pollHandle);
+                        }
+                    }
+                } catch (e) {
+                    // ignore transient errors
+                }
+            }, 1000);
+
+            const result = await tauriService.generateEmbeddings(indexPath, embedMaxFiles, embedBatchSize);
             console.log("Embed result:", result);
             setEmbedResult(result);
             setEmbedProgress(100);
@@ -261,6 +356,8 @@ export default function App() {
         } catch (error: any) {
             setEmbedStatus("error");
             setErrorMsg(error.toString());
+        } finally {
+            if (pollHandle) clearInterval(pollHandle);
         }
     };
 
@@ -371,6 +468,44 @@ export default function App() {
                     {indexPath && (
                         <div className="index-path-display">
                             📁 {indexPath}
+                            <button
+                                className="btn btn-small"
+                                style={{ marginLeft: '0.5rem' }}
+                                onClick={async () => {
+                                    try {
+                                        const selected = await open({ directory: true, multiple: false, title: 'Select index or scan folder' });
+                                        if (selected && typeof selected === 'string') {
+                                            const path = selected as string;
+                                            const candidateIndex = path.replace(/\/+$/, '') + '/.wayfinder_index';
+                                            // Prefer .wayfinder_index inside the selected folder, otherwise the folder itself
+                                            let chosen = path;
+                                            try {
+                                                const v1 = await tauriService.validateIndex(candidateIndex);
+                                                if (v1 && v1.index_valid) {
+                                                    chosen = candidateIndex;
+                                                } else {
+                                                    const v2 = await tauriService.validateIndex(path);
+                                                    if (v2 && v2.index_valid) {
+                                                        chosen = path;
+                                                    }
+                                                }
+                                            } catch (e) {
+                                                // ignore validation errors and just set selected
+                                                chosen = path;
+                                            }
+
+                                            setIndexPath(chosen);
+                                            // Refresh stats and config
+                                            await loadStats();
+                                            await loadAzureConfig(chosen);
+                                        }
+                                    } catch (err) {
+                                        console.error('Choose index error', err);
+                                    }
+                                }}
+                            >
+                                📂 Choose
+                            </button>
                         </div>
                     )}
                 </div>
@@ -529,121 +664,7 @@ export default function App() {
                 {activeSection === "embed" && (
                     <section className="content-section">
                         <h2>🧠 Generate Embeddings</h2>
-                        <p className="section-desc">
-                            Convert your indexed files into semantic vectors using Azure OpenAI for intelligent search and clustering.
-                        </p>
-
-                        {!indexPath ? (
-                            <div className="empty-state">
-                                <p>No index available. Please scan a folder first.</p>
-                                <button className="btn btn-primary" onClick={() => setActiveSection("scan")}>
-                                    📁 Go to Scan
-                                </button>
-                            </div>
-                        ) : (
-                            <>
-                                    {/* Azure Config Section */}
-                                    <div className="config-section">
-                                        <div className="config-header">
-                                            <h3>☁️ Azure OpenAI Configuration</h3>
-                                            <span className={`config-status ${azureConfigured ? "configured" : "not-configured"}`}>
-                                                {azureConfigured ? "✓ Configured" : "⚠ Not Configured"}
-                                            </span>
-                                            <button
-                                                className="btn btn-small"
-                                                onClick={() => setShowAzureConfig(!showAzureConfig)}
-                                            >
-                                                {showAzureConfig ? "Hide" : "Configure"}
-                                            </button>
-                                        </div>
-
-                                        {showAzureConfig && (
-                                            <div className="config-form">
-                                                <div className="form-group">
-                                                    <label>Azure OpenAI Endpoint:</label>
-                                                    <input
-                                                        type="text"
-                                                        placeholder="https://your-resource.openai.azure.com"
-                                                        value={azureEndpoint}
-                                                        onChange={(e) => setAzureEndpoint(e.target.value)}
-                                                    />
-                                                </div>
-                                                <div className="form-group">
-                                                    <label>API Key: {hasExistingKey && <span style={{color: 'var(--success-color)', fontSize: '0.85em'}}> (saved)</span>}</label>
-                                                    <input
-                                                        type="password"
-                                                        placeholder={hasExistingKey ? "Key already saved - enter new key to update" : "Your Azure OpenAI API key"}
-                                                        value={azureApiKey}
-                                                        onChange={(e) => setAzureApiKey(e.target.value)}
-                                                    />
-                                                    {hasExistingKey && <small style={{color: 'var(--text-secondary)'}}>Leave blank to keep existing key</small>}
-                                                </div>
-                                                <div className="form-group">
-                                                    <label>Deployment Name:</label>
-                                                    <input
-                                                        type="text"
-                                                        placeholder="text-embedding-ada-002"
-                                                        value={azureDeployment}
-                                                        onChange={(e) => setAzureDeployment(e.target.value)}
-                                                    />
-                                                    <small>The name of your embedding model deployment</small>
-                                                </div>
-                                                <button className="btn btn-primary" onClick={saveAzureConfig}>
-                                                    💾 Save Configuration
-                                                </button>
-                                            </div>
-                                        )}
-                                    </div>
-
-                                <div className="info-box">
-                                    <p><strong>Index:</strong> {indexPath}</p>
-                                    <p><strong>Files:</strong> {indexStats?.total_files || 0}</p>
-                                    <p><strong>Status:</strong> {indexStats?.has_embeddings ? "Embeddings exist" : "No embeddings yet"}</p>
-                                </div>
-
-                                <div className="action-row">
-                                        <button
-                                            className="btn btn-primary btn-large"
-                                            onClick={handleEmbed}
-                                            disabled={embedStatus === "running" || !azureConfigured}
-                                        >
-                                            {embedStatus === "running" ? "🔄 Generating..." : "🧠 Generate Embeddings"}
-                                        </button>
-                                        {!azureConfigured && (
-                                            <span className="hint">Configure Azure OpenAI first</span>
-                                        )}
-                                </div>
-
-                                {embedStatus === "running" && (
-                                    <div className="progress-section">
-                                        <div className="progress-bar">
-                                            <div className="progress-fill" style={{ width: `${embedProgress}%` }} />
-                                        </div>
-                                            <p>Generating embeddings... This may take a few minutes for large indexes.</p>
-                                            <small>Check the terminal for detailed progress.</small>
-                                    </div>
-                                )}
-
-                                    {embedStatus === "complete" && embedResult && (
-                                    <div className="success-message">
-                                        <h3>✅ Embeddings Generated!</h3>
-                                            <p>Generated: {embedResult.embeddings_generated} new embeddings</p>
-                                            <p>Cached: {embedResult.cached_count} (unchanged files)</p>
-                                            {embedResult.error_count > 0 && (
-                                                <p className="warning">Errors: {embedResult.error_count} files failed</p>
-                                            )}
-                                        <p>Your files are now ready for semantic search and clustering.</p>
-                                    </div>
-                                )}
-
-                                    {embedStatus === "error" && (
-                                        <div className="error-message">
-                                            <h3>❌ Embedding Failed</h3>
-                                            <p>{errorMsg}</p>
-                                        </div>
-                                    )}
-                            </>
-                        )}
+                        <p className="section-desc">Embedding UI temporarily disabled for debugging.</p>
                     </section>
                 )}
 
@@ -707,6 +728,156 @@ export default function App() {
                                                 )}
                                             </div>
                                         ))}
+                                    </div>
+                                )}
+                            </>
+                        )}
+                    </section>
+                )}
+
+                {/* Embed Section */}
+                {activeSection === "embed" && (
+                    <section className="content-section">
+                        <h2>🧠 Generate Embeddings</h2>
+                        <p className="section-desc">Convert your indexed files into semantic vectors using Azure OpenAI for intelligent search and clustering.</p>
+
+                        {!indexPath ? (
+                            <div className="empty-state">
+                                <p>No index available. Please scan a folder first.</p>
+                                <button className="btn btn-primary" onClick={() => setActiveSection("scan")}>
+                                    📁 Go to Scan
+                                </button>
+                            </div>
+                        ) : (
+                            <>
+                                <div className="config-section">
+                                    <div className="config-header">
+                                        <h3>☁️ Azure OpenAI Configuration</h3>
+                                        <span className={`config-status ${azureConfigured ? "configured" : "not-configured"}`}>
+                                            {azureConfigured ? "✓ Configured" : "⚠ Not Configured"}
+                                        </span>
+                                        <button
+                                            className="btn btn-small"
+                                            onClick={() => setShowAzureConfig(!showAzureConfig)}
+                                        >
+                                            {showAzureConfig ? "Hide" : "Configure"}
+                                        </button>
+                                    </div>
+
+                                    {showAzureConfig && (
+                                        <div className="config-form">
+                                            <div className="form-group">
+                                                <label>Azure OpenAI Endpoint:
+                                                    <span className="info-tooltip">ⓘ
+                                                        <span className="tooltip-bubble">Use the resource endpoint such as https://&lt;name&gt;.cognitiveservices.azure.com (not project URLs like /api/projects/...)</span>
+                                                    </span>
+                                                </label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="https://your-resource.openai.azure.com"
+                                                    value={azureEndpoint}
+                                                    onChange={(e) => setAzureEndpoint(e.target.value)}
+                                                />
+                                            </div>
+                                            <div className="form-group">
+                                                <label>API Key: {hasExistingKey && <span style={{color: 'var(--success-color)', fontSize: '0.85em'}}> (saved)</span>}</label>
+                                                <input
+                                                    type="password"
+                                                    placeholder={hasExistingKey ? "Key already saved - enter new key to update" : "Your Azure OpenAI API key"}
+                                                    value={azureApiKey}
+                                                    onChange={(e) => setAzureApiKey(e.target.value)}
+                                                />
+                                                {hasExistingKey && <small style={{color: 'var(--text-secondary)'}}>Leave blank to keep existing key</small>}
+                                            </div>
+                                            <div className="form-group">
+                                                <label>Deployment Name:</label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="text-embedding-ada-002"
+                                                    value={azureDeployment}
+                                                    onChange={(e) => setAzureDeployment(e.target.value)}
+                                                />
+                                                <small>The name of your embedding model deployment</small>
+                                            </div>
+                                            <div className="form-group">
+                                                <label>API Version (optional):</label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="2024-02-01"
+                                                    value={azureApiVersion}
+                                                    onChange={(e) => setAzureApiVersion(e.target.value)}
+                                                />
+                                                <small>Leave empty to use the default (auto-detect fallback to 2023-10-01 if needed)</small>
+                                            </div>
+                                            <button className="btn btn-primary" onClick={saveAzureConfig}>
+                                                💾 Save Configuration
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="info-box">
+                                    <p><strong>Index:</strong> {indexPath}</p>
+                                    <p><strong>Files:</strong> {indexStats?.total_files || 0}</p>
+                                    <p><strong>Status:</strong> {indexStats?.has_embeddings ? "Embeddings exist" : "No embeddings yet"}</p>
+                                </div>
+
+                                <div className="form-group">
+                                    <label>Test Options (optional):</label>
+                                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                        <input type="number" placeholder="Max files" value={embedMaxFiles ?? ''} onChange={(e) => setEmbedMaxFiles(e.target.value ? parseInt(e.target.value) : undefined)} />
+                                        <input type="number" placeholder="Batch size" value={embedBatchSize ?? ''} onChange={(e) => setEmbedBatchSize(e.target.value ? parseInt(e.target.value) : undefined)} />
+                                        <small style={{ color: 'var(--text-secondary)' }}>Use for quick tests</small>
+                                    </div>
+                                </div>
+
+                                <div className="action-row">
+                                    <button
+                                        className="btn btn-primary btn-large"
+                                        onClick={handleEmbed}
+                                        disabled={embedStatus === "running" || !azureConfigured}
+                                    >
+                                        {embedStatus === "running" ? "🔄 Generating..." : "🧠 Generate Embeddings"}
+                                    </button>
+                                    {!azureConfigured && (
+                                        <span className="hint">Configure Azure OpenAI first</span>
+                                    )}
+                                </div>
+
+                                {embedStatus === "running" && (
+                                    <div className="progress-section">
+                                        <div className="progress-bar">
+                                            <div className="progress-fill" style={{ width: `${embedProgress}%` }} />
+                                        </div>
+                                        <p>Generating embeddings... {embedProgress}%</p>
+                                    </div>
+                                )}
+
+                                {/* Validation modal for suggestions */}
+                                <Modal
+                                    visible={showValidationModal}
+                                    title="Suggested Endpoint"
+                                    message={validationMessage}
+                                    onConfirm={applySuggestedEndpoint}
+                                    onCancel={cancelSuggestedEndpoint}
+                                    confirmLabel="Apply & Save"
+                                    cancelLabel="Cancel"
+                                />
+
+                                {embedResult && (
+                                    <div className="embed-result">
+                                        <p>Cached: {embedResult.cached_count || 0} (unchanged files)</p>
+                                        {embedResult.error_count > 0 && (
+                                            <p className="warning">Errors: {embedResult.error_count} files failed</p>
+                                        )}
+                                        <p>Your files are now ready for semantic search and clustering.</p>
+                                    </div>
+                                )}
+
+                                {embedStatus === "error" && (
+                                    <div className="error-message">
+                                        <h3>❌ Embedding Failed</h3>
+                                        <p>{errorMsg}</p>
                                     </div>
                                 )}
                             </>

@@ -376,19 +376,25 @@ pub async fn generate_embeddings(index_dir: String, max_files: Option<usize>, ba
     let mut error_count = 0;
     let mut skipped_count = 0;
     
-    let api_version = if config.api_version.is_empty() { 
+    let mut api_version = if config.api_version.is_empty() { 
         "2024-02-01".to_string() 
     } else { 
         config.api_version.clone() 
     };
     
+    // Normalize endpoint to avoid duplicate /openai segments
+    let mut base = config.endpoint.trim_end_matches('/').to_string();
+    if !base.ends_with("/openai") && !base.ends_with("/openai/") {
+        base = format!("{}/openai", base);
+    }
+
     let url = format!(
-        "{}/openai/deployments/{}/embeddings?api-version={}",
-        config.endpoint.trim_end_matches('/'),
+        "{}/deployments/{}/embeddings?api-version={}",
+        base,
         config.deployment_name,
         api_version
     );
-    
+
     println!("[RUST] Embedding API URL: {}", url);
     
     // Initialize progress
@@ -451,8 +457,9 @@ pub async fn generate_embeddings(index_dir: String, max_files: Option<usize>, ba
         let mut success = false;
         
         while retries < max_retries && !success {
+            let url_current = format!("{}/deployments/{}/embeddings?api-version={}", base, config.deployment_name, api_version);
             match client
-                .post(&url)
+                .post(&url_current)
                 .header("api-key", &config.api_key)
                 .header("Content-Type", "application/json")
                 .json(&request_body)
@@ -461,20 +468,39 @@ pub async fn generate_embeddings(index_dir: String, max_files: Option<usize>, ba
             {
                 Ok(response) => {
                     if response.status().is_success() {
-                        if let Ok(json) = response.json::<serde_json::Value>().await {
-                            if let Some(embedding) = json["data"][0]["embedding"].as_array() {
-                                let emb_vec: Vec<f32> = embedding
-                                    .iter()
-                                    .filter_map(|v| v.as_f64().map(|f| f as f32))
-                                    .collect();
-                                
-                                new_embeddings.push(FileEmbedding {
-                                    path: file.path.clone(),
-                                    embedding: emb_vec,
-                                    content_hash: content_hash.clone(),
-                                });
-                                generated_count += 1;
-                                success = true;
+                        match response.json::<serde_json::Value>().await {
+                            Ok(json) => {
+                                // Check for explicit error field
+                                if json.get("error").is_some() {
+                                    let err_text = json["error"].to_string();
+                                    log_error(&index_path, "api_error", Some(&file.path), &err_text, None);
+                                    progress.errors.push(format!("{}: API error - {}", file.name, err_text));
+                                    error_count += 1;
+                                } else if let Some(embedding) = json["data"][0]["embedding"].as_array() {
+                                    let emb_vec: Vec<f32> = embedding
+                                        .iter()
+                                        .filter_map(|v| v.as_f64().map(|f| f as f32))
+                                        .collect();
+
+                                    new_embeddings.push(FileEmbedding {
+                                        path: file.path.clone(),
+                                        embedding: emb_vec,
+                                        content_hash: content_hash.clone(),
+                                    });
+                                    generated_count += 1;
+                                    success = true;
+                                } else {
+                                    // Unexpected response shape
+                                    let err_text = json.to_string();
+                                    log_error(&index_path, "api_error", Some(&file.path), &format!("Unexpected response: {}", err_text), None);
+                                    progress.errors.push(format!("{}: Unexpected response shape", file.name));
+                                    error_count += 1;
+                                }
+                            }
+                            Err(e) => {
+                                log_error(&index_path, "parse_error", Some(&file.path), &format!("Failed to parse JSON: {}", e), None);
+                                progress.errors.push(format!("{}: Failed to parse JSON", file.name));
+                                error_count += 1;
                             }
                         }
                     } else if response.status().as_u16() == 429 {
@@ -487,6 +513,25 @@ pub async fn generate_embeddings(index_dir: String, max_files: Option<usize>, ba
                     } else {
                         let status = response.status();
                         let error_text = response.text().await.unwrap_or_default();
+
+                        // Detect unsupported API version and attempt a fallback once
+                        if error_text.contains("API version not supported") {
+                            if api_version != "2023-10-01" {
+                                println!("[RUST] API version not supported, attempting fallback to 2023-10-01");
+                                api_version = "2023-10-01".to_string();
+                                // Rebuild URL with fallback API version
+                                base = config.endpoint.trim_end_matches('/').to_string();
+                                if !base.ends_with("/openai") && !base.ends_with("/openai/") {
+                                    base = format!("{}/openai", base);
+                                }
+                                // Update URL for subsequent requests
+                                // Note: the env URL variable will be overwritten in the outer scope for subsequent calls
+                                // Reset retries for this file so we try again with the new version
+                                retries = 0;
+                                continue; // retry this request with new api_version
+                            }
+                        }
+
                         log_error(&index_path, "api_error", Some(&file.path), &error_text, Some(&status.to_string()));
                         error_count += 1;
                         progress.errors.push(format!("{}: {} - {}", file.name, status, error_text));
@@ -556,6 +601,22 @@ pub async fn generate_embeddings(index_dir: String, max_files: Option<usize>, ba
     
     println!("[RUST] Embeddings complete: {} generated, {} cached, {} skipped, {} errors", 
         generated_count, cached_count, skipped_count, error_count);
+
+    // If there were many errors or nothing was generated, write a diagnostic file to help debugging
+    if error_count > 0 && generated_count == 0 {
+        let diag_file = index_path.join("embedding_diagnostic.json");
+        let diag = serde_json::json!({
+            "url_attempted": format!("{}/deployments/{}/embeddings?api-version={}", base, config.deployment_name, api_version),
+            "generated": generated_count,
+            "cached": cached_count,
+            "skipped": skipped_count,
+            "errors": error_count,
+            "sample_errors": progress.errors.iter().take(10).collect::<Vec<&String>>(),
+        });
+        if let Ok(djson) = serde_json::to_string_pretty(&diag) {
+            let _ = fs::write(&diag_file, djson);
+        }
+    }
     
     Ok(serde_json::json!({
         "embeddings_generated": generated_count,
@@ -1313,6 +1374,125 @@ pub async fn load_azure_config(index_dir: String) -> Result<serde_json::Value, S
         "has_key": !config.api_key.is_empty()
     }))
 }
+
+/// Validate Azure configuration by making a small embeddings request
+#[tauri::command(rename_all = "camelCase")]
+pub async fn validate_azure_config(
+    index_dir: String,
+    endpoint: String,
+    api_key: String,
+    deployment_name: String,
+    api_version: Option<String>,
+) -> Result<serde_json::Value, String> {
+    println!("[RUST] validate_azure_config called for endpoint: {}", endpoint);
+
+    // Normalize endpoint
+    let mut base = endpoint.trim_end_matches('/').to_string();
+    let mut suggested: Option<String> = None;
+
+    if base.contains("/api/projects") || base.contains("/api/") {
+        // Try to extract host and suggest cognitiveservices domain
+        if let Ok(url) = reqwest::Url::parse(&base) {
+            if let Some(host) = url.host_str() {
+                if host.contains("services.ai.azure.com") {
+                    if let Some(prefix) = host.split('.').next() {
+                        suggested = Some(format!("https://{}.cognitiveservices.azure.com", prefix));
+                    }
+                } else {
+                    // Suggest base host only
+                    suggested = Some(format!("https://{}", host));
+                }
+            }
+        }
+    } else if base.contains("services.ai.azure.com") {
+        // If user supplied services.ai.azure.com, suggest cognitiveservices
+        if let Ok(url) = reqwest::Url::parse(&base) {
+            if let Some(host) = url.host_str() {
+                if let Some(prefix) = host.split('.').next() {
+                    suggested = Some(format!("https://{}.cognitiveservices.azure.com", prefix));
+                }
+            }
+        }
+    }
+
+    // Prepare versions to try
+    let mut tried_versions: Vec<String> = Vec::new();
+    let mut api_version_current = api_version.unwrap_or_else(|| "2024-02-01".to_string());
+    let fallback_versions = vec!["2024-02-01".to_string(), "2023-10-01".to_string(), "2023-05-15".to_string()];
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    // Try current and fallbacks
+    for v in std::iter::once(api_version_current.clone()).chain(fallback_versions.into_iter()) {
+        if tried_versions.contains(&v) { continue; }
+        tried_versions.push(v.clone());
+
+        // Ensure base has /openai path
+        let mut url_base = base.clone();
+        if !url_base.ends_with("/openai") && !url_base.ends_with("/openai/") {
+            url_base = format!("{}/openai", url_base);
+        }
+
+        let url = format!("{}/deployments/{}/embeddings?api-version={}", url_base, deployment_name, v);
+
+        println!("[RUST] validate attempt url: {}", url);
+
+        let body = serde_json::json!({ "input": ["healthcheck"] });
+
+        match client.post(&url).header("api-key", &api_key).json(&body).send().await {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                if response.status().is_success() {
+                    // Good response - success
+                    return Ok(serde_json::json!({
+                        "success": true,
+                        "message": "Validation succeeded",
+                        "tried_versions": tried_versions,
+                        "final_url": url,
+                        "status_code": status
+                    }));
+                } else {
+                    let text = response.text().await.unwrap_or_default();
+                    // If api-version not supported, try next
+                    if text.contains("API version not supported") {
+                        println!("[RUST] API version not supported for {}", v);
+                        continue;
+                    }
+                    // Return error details
+                    return Ok(serde_json::json!({
+                        "success": false,
+                        "message": format!("Server returned {}: {}", status, text),
+                        "tried_versions": tried_versions,
+                        "final_url": url,
+                        "status_code": status,
+                        "suggested_endpoint": suggested
+                    }));
+                }
+            }
+            Err(e) => {
+                println!("[RUST] Request error: {}", e);
+                // network or connection error - return as failure but include suggestion
+                return Ok(serde_json::json!({
+                    "success": false,
+                    "message": format!("Request failed: {}", e),
+                    "tried_versions": tried_versions,
+                    "suggested_endpoint": suggested
+                }));
+            }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "success": false,
+        "message": "All tried API versions failed",
+        "tried_versions": tried_versions,
+        "suggested_endpoint": suggested
+    }))
+}
+
 
 /// Get clusters summary for display
 #[tauri::command(rename_all = "camelCase")]

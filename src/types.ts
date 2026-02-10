@@ -91,6 +91,15 @@ export interface AzureConfigStatus {
     has_key: boolean;
 }
 
+export interface AzureValidationResult {
+    success: boolean;
+    message: string;
+    suggested_endpoint?: string;
+    tried_versions?: string[];
+    final_url?: string;
+    status_code?: number;
+}
+
 // Clusters data response
 export interface ClustersData {
     has_clusters: boolean;
@@ -111,6 +120,19 @@ export interface OperationProgress {
     percent: number;
     status: "pending" | "running" | "complete" | "error";
     error?: string;
+}
+
+export interface BatchProgress {
+    batch_id: string;
+    total_files: number;
+    processed_files: number;
+    current_batch: number;
+    total_batches: number;
+    batch_size: number;
+    status: string; // running | paused | complete | error
+    started_at: string;
+    last_updated: string;
+    errors: string[];
 }
 
 // Git Assistant types

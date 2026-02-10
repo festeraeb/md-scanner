@@ -117,6 +117,36 @@
     border-bottom: 1px solid var(--border-color);
 }
 
+/* Tooltip helper for small info icons */
+.info-tooltip {
+  display: inline-block;
+  position: relative;
+  cursor: help;
+  color: var(--text-secondary);
+  margin-left: 0.5rem;
+}
+
+.info-tooltip .tooltip-bubble {
+  position: absolute;
+  bottom: 125%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--panel-bg);
+  color: var(--text);
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.2);
+  white-space: nowrap;
+  display: none;
+  z-index: 1000;
+  font-size: 0.85rem;
+}
+
+.info-tooltip:hover .tooltip-bubble {
+  display: block;
+}
+
+
 .stats-summary {
     display: flex;
     gap: var(--spacing-lg);

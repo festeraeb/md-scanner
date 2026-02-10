@@ -7,8 +7,12 @@ export const tauriService = {
         return invoke("scan_directory", { path, indexDir });
     },
 
-    async generateEmbeddings(indexDir: string): Promise<Types.EmbedResult> {
-        return invoke("generate_embeddings", { indexDir });
+    async generateEmbeddings(indexDir: string, maxFiles?: number, batchSize?: number): Promise<Types.EmbedResult> {
+        return invoke("generate_embeddings", { indexDir, maxFiles, batchSize });
+    },
+
+    async getEmbeddingProgress(indexDir: string): Promise<Types.BatchProgress> {
+        return invoke("get_embedding_progress", { indexDir });
     },
 
     async createClusters(
@@ -73,6 +77,10 @@ export const tauriService = {
 
     async loadAzureConfig(indexDir: string): Promise<Types.AzureConfigStatus> {
         return invoke("load_azure_config", { indexDir });
+    },
+
+    async validateAzureConfig(indexDir: string, endpoint: string, apiKey: string, deploymentName: string, apiVersion?: string): Promise<Types.AzureValidationResult> {
+        return invoke("validate_azure_config", { indexDir, endpoint, apiKey, deploymentName, apiVersion });
     },
 
     async getClustersData(indexDir: string): Promise<Types.ClustersData> {
