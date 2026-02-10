@@ -1,0 +1,6 @@
+{
+  "endpoint": "https://YOUR-RESOURCE.openai.azure.com",
+  "api_key": "YOUR_API_KEY_HERE",
+  "deployment_name": "text-embedding-3-small",
+  "api_version": "2024-02-01"
+}
