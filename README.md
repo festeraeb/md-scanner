@@ -1,246 +1,191 @@
-# Markdown Scanner & Organizer
+# ⛵🐕 Wayfinder
 
-An intelligent markdown file organization and discovery tool designed for ADHD minds that generate ideas faster than they can organize them.
+**A desktop file indexer and organizer with AI-powered semantic search and Git integration**
 
-## Features
-
-### 1. **Semantic File Discovery**
-- Find related files even with different terminology
-- "Find my notes about sonar processing" returns semantically similar content
-- Powered by local embeddings (no API costs)
-
-### 2. **Automatic Clustering**
-- Automatically groups files into coherent topics
-- "These 47 files are about magnetic detection methodology"
-- Discovers patterns in your scattered notes
-
-### 3. **Timeline/Recency Awareness**
-- Organize files by when they were modified
-- "You worked on this idea 3 months ago, here are those files"
-- Identify orphaned or aged files
-
-### 4. **Combined Search**
-- Semantic similarity (finds related content)
-- Keyword matching (exact term search)
-- Blended results for best of both worlds
-
-### 5. **Quick Statistics**
-- Total files and storage used
-- Age distribution of your notes
-- Cluster overview
-
-## Installation
-
-```bash
-git clone https://github.com/yourusername/md-scanner.git
-cd md-scanner
-pip install -r requirements.txt
-```
-
-## Quick Start
-
-### 1. Scan your markdown directories
-
-```bash
-python main.py scan /path/to/your/notes
-```
-
-This recursively finds all `.md` files and builds an index of their metadata.
-
-### 2. Generate embeddings
-
-```bash
-python main.py embed
-```
-
-Creates semantic embeddings for all files (one-time, takes a few minutes for large collections).
-
-### 3. Create clusters
-
-```bash
-python main.py cluster
-```
-
-Groups similar files into semantic clusters automatically.
-
-### 4. Start searching
-
-```bash
-python main.py search "sonar processing techniques"
-```
-
-### 5. Explore your files
-
-```bash
-# Show recent activity
-python main.py timeline --days 30
-
-# List all clusters
-python main.py list-clusters
-
-# Get overview statistics
-python main.py stats
-```
-
-## How It Works
-
-### Architecture
-
-```
-File System
-    ↓
-[Scanner] → Metadata Index (files.json)
-    ↓
-[Embedding Engine] → Embeddings (embeddings.pkl)
-    ↓
-[Clustering Engine] → Cluster Assignments (clusters.json)
-    ↓
-[Search Engine] → Results
-```
-
-### Semantic Search
-
-Uses `sentence-transformers` (all-MiniLM-L6-v2 model) to:
-1. Extract content preview from each markdown file
-2. Generate embedding vectors (384-dimensional)
-3. Compare query embedding to file embeddings
-4. Return files with highest cosine similarity
-
-### Local Indexing
-
-All data is stored locally in `~/.md_index/`:
-- `files.json` - File metadata and paths
-- `embeddings.pkl` - Cached embedding vectors
-- `clusters.json` - Cluster assignments
-
-No data leaves your computer. No API costs.
-
-## Commands Reference
-
-### `scan <directory>`
-Index all markdown files in a directory tree.
-
-**Options:**
-- `--index-dir`: Override default index location
-
-### `embed`
-Generate embeddings for all indexed files.
-
-**Workflow:**
-1. Loads file paths from index
-2. Extracts text content from files
-3. Generates embeddings using transformer model
-4. Saves embeddings to disk (reusable)
-
-### `cluster`
-Group similar files into semantic clusters.
-
-**Options:**
-- `--num-clusters`: Override auto-estimated cluster count
-
-### `search <query>`
-Find files matching your query.
-
-**Options:**
-- `--top-k`: Number of results (default: 10)
-- `--semantic-weight`: Semantic vs keyword balance (0.0-1.0, default: 0.7)
-
-### `list-clusters`
-Show overview of all clusters with sample files.
-
-### `timeline`
-Show recent files organized by date.
-
-**Options:**
-- `--days`: Show files from last N days (default: 30)
-
-### `stats`
-Display index statistics and overview.
-
-## What It Filters Out
-
-Files matching these patterns are automatically excluded to avoid noise:
-- venv directories
-- site-packages (pip packages)
-- Dist-info directories (wheel metadata)
-- __pycache__ directories
-- LICENSE.md files (common but not personal notes)
-- Path LICENSE.md files in site packages
-
-## Performance
-
-- **Scanning:** ~1000 files/second
-- **Embedding:** ~50-100 files/second (depends on file size)
-- **Clustering:** Instant (uses cached embeddings)
-- **Search:** Instant (cached embeddings)
-
-For 3000 files:
-- Scan: ~3 seconds
-- Embed: ~30-60 seconds (one-time)
-- Clustering: <1 second
-- Each search: <100ms
-
-## Future Enhancements
-
-**Stage 2 - Adaptive File Naming:**
-- Suggest better filenames when saving new notes
-- Learn your naming patterns
-- Build habits without permanent dependency
-
-**Stage 3 - Cross-Reference Detection:**
-- Find files mentioning same coordinates/data
-- Identify code snippet variations
-- Surface accidental duplication
-
-**Stage 4 - GUI Dashboard:**
-- Visual cluster map
-- Interactive timeline
-- Search interface
-- File preview
-
-**Stage 5 - Mobile Support:**
-- Tauri wrapper for desktop
-- Mobile apps for iOS/Android
-- Cloud sync option (optional, encrypted)
-
-## Technical Details
-
-### Dependencies
-
-- `sentence-transformers`: Semantic embeddings
-- `scikit-learn`: K-means clustering
-- `numpy`: Vector operations
-- `click`: CLI framework
-- `tqdm`: Progress bars
-
-### Model Used
-
-**all-MiniLM-L6-v2**
-- 22M parameters (lightweight)
-- 384-dimensional embeddings
-- Trained on sentence similarity
-- Fast inference, good quality
-
-## Why Local Embeddings?
-
-- **No API costs** - Everything runs on your machine
-- **No data leakage** - Your notes never leave your computer
-- **Offline capable** - Works without internet
-- **Deterministic** - Same embeddings every time
-- **Privacy-first** - Your thoughts stay private
-
-## Contributing
-
-This is a solo ADHD project built with AI assistance. It's designed to solve a real problem: organizing thoughts faster than they're generated.
-
-## License
-
-MIT
-
-## Author
-
-Built with Claude (Anthropic) + ADHD creativity
+Built with Tauri 2.0 + React + Rust | by NautiDog
 
 ---
 
-**The core belief:** This tool demonstrates AI as cognitive accessibility technology - helping neurodivergent developers build sophisticated tools while building the tools they need.
+## ✨ Features
+
+### 📁 File Scanning & Indexing
+- Recursively scan directories to build a searchable file index
+- Filter by file types (Markdown, Python, JavaScript, Documents, etc.)
+- Fast Rust-powered indexing with progress tracking
+- Persistent index storage for quick reload
+
+### 🧠 Azure OpenAI Embeddings
+- Generate semantic embeddings for all your files using Azure OpenAI
+- Smart caching - only re-embeds files that have changed
+- Uses `text-embedding-3-small` model (5x cheaper than ada-002)
+- Batch processing with progress indicators
+
+### 🗂️ K-Means Clustering
+- Automatically organize files into semantic clusters
+- Pure Rust k-means implementation with cosine distance
+- Discover related files you didn't know were connected
+- Configurable cluster count
+
+### 🔍 Hybrid Search
+- Combine keyword and semantic search
+- Adjustable semantic weight slider
+- Ranked results with relevance scores
+- File previews in search results
+
+### 📅 Timeline View
+- See files organized by modification date
+- Configurable time range (7/14/30/90 days)
+- Quick access to recently changed files
+
+### 📎 Git Clippy Assistant
+Your friendly git companion for ADHD developers!
+
+- **Urgency Levels**: Chill → Nudge → Warning → Panic based on repo state
+- **Smart Commit Suggestions**: Groups files by directory/extension with auto-generated messages
+- **Duplicate Detection**: Finds identical files by content hash
+- **Copy Pattern Detection**: Flags `_copy`, `_backup`, `_old` file naming
+- **Days Since Commit**: Gentle reminders when it's been too long
+- **Quick Actions**: 
+  - WIP commit all changes
+  - Create feature branch
+  - Initialize new repo
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+- [Node.js](https://nodejs.org/) v18+
+- [Rust](https://rustup.rs/) (latest stable)
+- [Azure OpenAI](https://azure.microsoft.com/en-us/products/cognitive-services/openai-service/) account (for embeddings)
+
+### Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/AceOmni/wayfinder.git
+cd wayfinder
+
+# Install dependencies
+npm install
+
+# Run in development mode
+npm run tauri dev
+
+# Build for production
+npm run tauri build
+```
+
+### Configure Azure OpenAI
+
+1. Copy the template config:
+   ```bash
+   cp azure_config.template.json .wayfinder_index/azure_config.json
+   ```
+
+2. Edit with your Azure credentials:
+   ```json
+   {
+     "endpoint": "https://YOUR-RESOURCE.openai.azure.com",
+     "api_key": "YOUR_API_KEY_HERE",
+     "deployment_name": "text-embedding-3-small",
+     "api_version": "2024-02-01"
+   }
+   ```
+
+3. Or configure directly in the app's Embeddings section.
+
+---
+
+## 🎯 Usage
+
+### Scan a Folder
+1. Click **Scan** in the sidebar
+2. Select file types to include
+3. Enter or browse for a folder path
+4. Click **Start Scan**
+
+### Generate Embeddings
+1. Click **Embeddings** in the sidebar
+2. Configure Azure OpenAI if not already done
+3. Click **Generate Embeddings**
+4. Wait for processing (cached for future runs)
+
+### Create Clusters
+1. Click **Clusters** in the sidebar
+2. Optionally set the number of clusters
+3. Click **Create Clusters**
+4. Explore auto-organized file groups
+
+### Search Files
+1. Click **Search** in the sidebar
+2. Enter your search query
+3. Adjust the semantic weight slider
+4. View ranked results with previews
+
+### Git Clippy
+1. Scan a folder that contains a git repository
+2. Click **Git Clippy** in the sidebar
+3. View suggestions and take actions
+4. Dismiss suggestions you don't need
+
+---
+
+## 🛠️ Tech Stack
+
+| Component | Technology |
+|-----------|------------|
+| Desktop Framework | Tauri 2.0 |
+| Frontend | React 18 + TypeScript |
+| Styling | CSS with CSS Variables |
+| Backend | Rust |
+| Embeddings | Azure OpenAI API |
+| Clustering | K-means (pure Rust) |
+| File Scanning | walkdir crate |
+| HTTP Client | reqwest |
+
+---
+
+## 📂 Project Structure
+
+```
+wayfinder/
+├── src/                    # React frontend
+│   ├── components/         # React components
+│   ├── services/           # Tauri API wrappers
+│   ├── styles/             # CSS stylesheets
+│   └── types.ts            # TypeScript types
+├── src-tauri/              # Rust backend
+│   └── src/
+│       ├── commands.rs     # Tauri command handlers
+│       ├── git_assistant.rs # Git Clippy logic
+│       ├── main.rs         # App entry point
+│       └── lib.rs          # Module exports
+├── azure_config.template.json
+└── README.md
+```
+
+---
+
+## 🔐 Security
+
+- Azure API keys are stored locally in `.wayfinder_index/azure_config.json`
+- This file is gitignored and never committed
+- Keys are only used for Azure OpenAI API calls
+- No data is sent to external servers except embeddings
+
+---
+
+## 📝 License
+
+MIT License - feel free to use, modify, and distribute.
+
+---
+
+## 🤝 Contributing
+
+Contributions welcome! Please open an issue or PR.
+
+---
+
+Made with ❤️ by NautiDog

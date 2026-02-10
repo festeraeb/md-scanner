@@ -50,6 +50,12 @@ yarn-error.log*
 # Tauri build output
 src-tauri/target/
 
+# Azure credentials (DO NOT COMMIT)
+**/azure_config.json
+
+# Wayfinder index data
+.wayfinder_index/
+
 # Temporary files
 tmpclaude-*
 *.tmp

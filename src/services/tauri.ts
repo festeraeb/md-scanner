@@ -54,4 +54,41 @@ export const tauriService = {
     async getSystemInfo(): Promise<Types.SystemInfo> {
         return invoke("get_system_info");
     },
+
+    async saveAzureConfig(
+        indexDir: string,
+        endpoint: string,
+        apiKey: string,
+        deploymentName: string,
+        apiVersion?: string
+    ): Promise<{ success: boolean; message: string }> {
+        return invoke("save_azure_config", {
+            indexDir,
+            endpoint,
+            apiKey,
+            deploymentName,
+            apiVersion,
+        });
+    },
+
+    async loadAzureConfig(indexDir: string): Promise<Types.AzureConfigStatus> {
+        return invoke("load_azure_config", { indexDir });
+    },
+
+    async getClustersData(indexDir: string): Promise<Types.ClustersData> {
+        return invoke("get_clusters_data", { indexDir });
+    },
+
+    // Git Assistant
+    async getGitClippyReport(repoPath: string, indexDir?: string): Promise<Types.GitClippyReport> {
+        return invoke("get_git_clippy_report", { repoPath, indexDir });
+    },
+
+    async executeClippyAction(repoPath: string, action: string, data?: any): Promise<{ success: boolean; output: string }> {
+        return invoke("execute_clippy_action", { repoPath, action, data });
+    },
+
+    async isGitRepo(path: string): Promise<boolean> {
+        return invoke("is_git_repo", { path });
+    },
 };

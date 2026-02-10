@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { tauriService } from "./services/tauri";
 import { useTheme } from "./hooks/useTauri";
 import { open } from "@tauri-apps/plugin-dialog";
+import { GitAssistant } from "./components/GitAssistant";
 import "./styles/global.css";
 import "./styles/app.css";
 import "./styles/panels.css";
@@ -19,7 +20,7 @@ const FILE_TYPE_PRESETS = {
 };
 
 type OperationStatus = "idle" | "running" | "complete" | "error";
-type ActiveSection = "status" | "scan" | "embed" | "cluster" | "search" | "timeline";
+type ActiveSection = "status" | "scan" | "embed" | "cluster" | "search" | "timeline" | "git";
 
 interface ScanResult {
     files_scanned: number;
@@ -61,6 +62,14 @@ export default function App() {
     // Embed state
     const [embedStatus, setEmbedStatus] = useState<OperationStatus>("idle");
     const [embedProgress, setEmbedProgress] = useState(0);
+    const [embedResult, setEmbedResult] = useState<any>(null);
+
+    // Azure config state
+    const [azureConfigured, setAzureConfigured] = useState(false);
+    const [azureEndpoint, setAzureEndpoint] = useState("");
+    const [azureApiKey, setAzureApiKey] = useState("");
+    const [azureDeployment, setAzureDeployment] = useState("text-embedding-ada-002");
+    const [showAzureConfig, setShowAzureConfig] = useState(false);
 
     // Cluster state
     const [clusterStatus, setClusterStatus] = useState<OperationStatus>("idle");
@@ -150,9 +159,48 @@ export default function App() {
             setIndexPath(effectiveIndexPath);
             setScanStatus("complete");
             loadStats();
+            loadAzureConfig(effectiveIndexPath);
         } catch (error: any) {
             console.error("Scan error:", error);
             setScanStatus("error");
+            setErrorMsg(error.toString());
+        }
+    };
+
+    // Load Azure config
+    const loadAzureConfig = async (dir: string) => {
+        try {
+            const config = await tauriService.loadAzureConfig(dir);
+            setAzureConfigured(config.configured);
+            if (config.endpoint) setAzureEndpoint(config.endpoint);
+            if (config.deployment_name) setAzureDeployment(config.deployment_name);
+        } catch (error) {
+            console.log("No Azure config found");
+        }
+    };
+
+    // Save Azure config
+    const saveAzureConfig = async () => {
+        if (!indexPath) {
+            setErrorMsg("Please scan a folder first to set the index location");
+            return;
+        }
+        if (!azureEndpoint || !azureApiKey || !azureDeployment) {
+            setErrorMsg("Please fill in all Azure configuration fields");
+            return;
+        }
+
+        try {
+            await tauriService.saveAzureConfig(
+                indexPath,
+                azureEndpoint,
+                azureApiKey,
+                azureDeployment
+            );
+            setAzureConfigured(true);
+            setShowAzureConfig(false);
+            setErrorMsg("");
+        } catch (error: any) {
             setErrorMsg(error.toString());
         }
     };
@@ -164,12 +212,22 @@ export default function App() {
             return;
         }
 
+        if (!azureConfigured) {
+            setShowAzureConfig(true);
+            setErrorMsg("Please configure Azure OpenAI settings first.");
+            return;
+        }
+
         setEmbedStatus("running");
-        setEmbedProgress(0);
+        setEmbedProgress(10);
         setErrorMsg("");
+        setEmbedResult(null);
 
         try {
-            await tauriService.generateEmbeddings(indexPath);
+            const result = await tauriService.generateEmbeddings(indexPath);
+            console.log("Embed result:", result);
+            setEmbedResult(result);
+            setEmbedProgress(100);
             setEmbedStatus("complete");
             loadStats();
         } catch (error: any) {
@@ -232,6 +290,7 @@ export default function App() {
         { id: "cluster", icon: "🗂️", label: "Clusters" },
         { id: "search", icon: "🔍", label: "Search" },
         { id: "timeline", icon: "📅", label: "Timeline" },
+        { id: "git", icon: "📎", label: "Git Clippy" },
     ];
 
     return (
@@ -443,7 +502,7 @@ export default function App() {
                     <section className="content-section">
                         <h2>🧠 Generate Embeddings</h2>
                         <p className="section-desc">
-                            Convert your indexed files into semantic vectors for intelligent search and clustering.
+                            Convert your indexed files into semantic vectors using Azure OpenAI for intelligent search and clustering.
                         </p>
 
                         {!indexPath ? (
@@ -455,6 +514,58 @@ export default function App() {
                             </div>
                         ) : (
                             <>
+                                    {/* Azure Config Section */}
+                                    <div className="config-section">
+                                        <div className="config-header">
+                                            <h3>☁️ Azure OpenAI Configuration</h3>
+                                            <span className={`config-status ${azureConfigured ? "configured" : "not-configured"}`}>
+                                                {azureConfigured ? "✓ Configured" : "⚠ Not Configured"}
+                                            </span>
+                                            <button
+                                                className="btn btn-small"
+                                                onClick={() => setShowAzureConfig(!showAzureConfig)}
+                                            >
+                                                {showAzureConfig ? "Hide" : "Configure"}
+                                            </button>
+                                        </div>
+
+                                        {showAzureConfig && (
+                                            <div className="config-form">
+                                                <div className="form-group">
+                                                    <label>Azure OpenAI Endpoint:</label>
+                                                    <input
+                                                        type="text"
+                                                        placeholder="https://your-resource.openai.azure.com"
+                                                        value={azureEndpoint}
+                                                        onChange={(e) => setAzureEndpoint(e.target.value)}
+                                                    />
+                                                </div>
+                                                <div className="form-group">
+                                                    <label>API Key:</label>
+                                                    <input
+                                                        type="password"
+                                                        placeholder="Your Azure OpenAI API key"
+                                                        value={azureApiKey}
+                                                        onChange={(e) => setAzureApiKey(e.target.value)}
+                                                    />
+                                                </div>
+                                                <div className="form-group">
+                                                    <label>Deployment Name:</label>
+                                                    <input
+                                                        type="text"
+                                                        placeholder="text-embedding-ada-002"
+                                                        value={azureDeployment}
+                                                        onChange={(e) => setAzureDeployment(e.target.value)}
+                                                    />
+                                                    <small>The name of your embedding model deployment</small>
+                                                </div>
+                                                <button className="btn btn-primary" onClick={saveAzureConfig}>
+                                                    💾 Save Configuration
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+
                                 <div className="info-box">
                                     <p><strong>Index:</strong> {indexPath}</p>
                                     <p><strong>Files:</strong> {indexStats?.total_files || 0}</p>
@@ -462,13 +573,16 @@ export default function App() {
                                 </div>
 
                                 <div className="action-row">
-                                        <button 
+                                        <button
                                             className="btn btn-primary btn-large"
                                             onClick={handleEmbed}
-                                            disabled={embedStatus === "running"}
+                                            disabled={embedStatus === "running" || !azureConfigured}
                                         >
                                             {embedStatus === "running" ? "🔄 Generating..." : "🧠 Generate Embeddings"}
                                         </button>
+                                        {!azureConfigured && (
+                                            <span className="hint">Configure Azure OpenAI first</span>
+                                        )}
                                 </div>
 
                                 {embedStatus === "running" && (
@@ -476,16 +590,29 @@ export default function App() {
                                         <div className="progress-bar">
                                             <div className="progress-fill" style={{ width: `${embedProgress}%` }} />
                                         </div>
-                                        <p>Generating embeddings... This may take a few minutes.</p>
+                                            <p>Generating embeddings... This may take a few minutes for large indexes.</p>
+                                            <small>Check the terminal for detailed progress.</small>
                                     </div>
                                 )}
 
-                                {embedStatus === "complete" && (
+                                    {embedStatus === "complete" && embedResult && (
                                     <div className="success-message">
                                         <h3>✅ Embeddings Generated!</h3>
+                                            <p>Generated: {embedResult.embeddings_generated} new embeddings</p>
+                                            <p>Cached: {embedResult.cached_count} (unchanged files)</p>
+                                            {embedResult.error_count > 0 && (
+                                                <p className="warning">Errors: {embedResult.error_count} files failed</p>
+                                            )}
                                         <p>Your files are now ready for semantic search and clustering.</p>
                                     </div>
                                 )}
+
+                                    {embedStatus === "error" && (
+                                        <div className="error-message">
+                                            <h3>❌ Embedding Failed</h3>
+                                            <p>{errorMsg}</p>
+                                        </div>
+                                    )}
                             </>
                         )}
                     </section>
@@ -687,6 +814,15 @@ export default function App() {
                                 </div>
                             </>
                         )}
+                    </section>
+                )}
+
+                {/* Git Assistant Section */}
+                {activeSection === "git" && (
+                    <section className="content-section">
+                        <h2>📎 Git Clippy Assistant</h2>
+                        <p className="section-desc">Your friendly git helper for ADHD developers.</p>
+                        <GitAssistant repoPath={scanPath} indexPath={indexPath} />
                     </section>
                 )}
             </main>

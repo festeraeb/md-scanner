@@ -20,6 +20,13 @@ fn main() {
             commands::get_stats,
             commands::validate_index,
             commands::get_system_info,
+            commands::save_azure_config,
+            commands::load_azure_config,
+            commands::get_clusters_data,
+            // Git Clippy Assistant commands
+            commands::get_git_clippy_report,
+            commands::execute_clippy_action,
+            commands::is_git_repo,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

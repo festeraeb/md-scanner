@@ -79,6 +79,27 @@ export interface ClustersSummary {
     clusters?: ClusterInfo[];
 }
 
+// Azure OpenAI config status
+export interface AzureConfigStatus {
+    configured: boolean;
+    endpoint: string;
+    deployment_name: string;
+    api_version: string;
+    has_key: boolean;
+}
+
+// Clusters data response
+export interface ClustersData {
+    has_clusters: boolean;
+    clusters: {
+        id: number;
+        file_count: number;
+        files: string[];
+        label?: string;
+    }[];
+    created_at?: string;
+}
+
 // UI State types
 export interface OperationProgress {
     operation: string;
@@ -87,4 +108,52 @@ export interface OperationProgress {
     percent: number;
     status: "pending" | "running" | "complete" | "error";
     error?: string;
+}
+
+// Git Assistant types
+export interface GitStatus {
+    is_repo: boolean;
+    branch: string;
+    uncommitted_files: number;
+    staged_files: number;
+    untracked_files: number;
+    days_since_commit: number;
+    last_commit_message: string | null;
+    last_commit_date: string | null;
+}
+
+export interface ClippyAction {
+    label: string;
+    action_type: string;
+    data?: any;
+}
+
+export interface ClippySuggestion {
+    id: string;
+    icon: string;
+    title: string;
+    description: string;
+    actions: ClippyAction[];
+    priority: number;
+}
+
+export interface DuplicateFile {
+    original: string;
+    duplicates: string[];
+    content_hash: string;
+}
+
+export interface CommitSuggestion {
+    files: string[];
+    suggested_message: string;
+    category: string;
+}
+
+export interface GitClippyReport {
+    status: GitStatus;
+    urgency_level: string;
+    message: string;
+    suggestions: ClippySuggestion[];
+    duplicates: DuplicateFile[];
+    commit_suggestions: CommitSuggestion[];
 }
