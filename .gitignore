@@ -35,6 +35,10 @@ wheels/
 .md_index/
 *.pkl
 *.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!src-tauri/tauri.conf.json
 !requirements.txt
 
 # Testing
