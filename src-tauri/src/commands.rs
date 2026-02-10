@@ -896,11 +896,65 @@ pub async fn get_clusters_summary(index_dir: String) -> Result<serde_json::Value
     Ok(serde_json::json!([]))
 }
 
-/// Get timeline of file modifications (stub)
+/// Get timeline of file modifications
 #[tauri::command(rename_all = "camelCase")]
 pub async fn get_timeline(index_dir: String, days: usize) -> Result<serde_json::Value, String> {
+    let index_path = Path::new(&index_dir);
+    let index_file = index_path.join("index.json");
+    
+    if !index_file.exists() {
+        return Err("Index not found. Please scan a directory first.".to_string());
+    }
+    
+    let content = fs::read_to_string(&index_file)
+        .map_err(|e| format!("Failed to read index: {}", e))?;
+    
+    let index_data: IndexData = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse index: {}", e))?;
+    
+    // Group files by date
+    let mut files_by_date: std::collections::HashMap<String, Vec<serde_json::Value>> = std::collections::HashMap::new();
+    
+    for file in &index_data.files {
+        // Parse the modified date and extract just the date part
+        let date_part = if file.modified.len() >= 10 {
+            file.modified[..10].to_string()
+        } else {
+            file.modified.clone()
+        };
+        
+        files_by_date
+            .entry(date_part)
+            .or_insert_with(Vec::new)
+            .push(serde_json::json!({
+                "name": file.name,
+                "path": file.path,
+                "size": file.size,
+                "modified": file.modified
+            }));
+    }
+    
+    // Sort dates in descending order and take only requested number of days
+    let mut dates: Vec<String> = files_by_date.keys().cloned().collect();
+    dates.sort_by(|a, b| b.cmp(a)); // Descending order (newest first)
+    
+    let timeline: Vec<serde_json::Value> = dates
+        .into_iter()
+        .take(days)
+        .map(|date| {
+            let files = files_by_date.get(&date).cloned().unwrap_or_default();
+            serde_json::json!({
+                "date": date,
+                "files": files,
+                "count": files.len()
+            })
+        })
+        .collect();
+    
     Ok(serde_json::json!({
-        "entries": []
+        "timeline": timeline,
+        "total_days": timeline.len(),
+        "total_files": index_data.files.len()
     }))
 }
 
@@ -999,14 +1053,30 @@ pub async fn save_azure_config(
     fs::create_dir_all(&index_path)
         .map_err(|e| format!("Failed to create index directory: {}", e))?;
     
+    let config_file = index_path.join("azure_config.json");
+    
+    // If no new key provided, try to preserve existing key
+    let final_api_key = if api_key.is_empty() {
+        // Try to load existing config to get the key
+        if config_file.exists() {
+            let content = fs::read_to_string(&config_file).ok();
+            content.and_then(|c| {
+                serde_json::from_str::<AzureConfig>(&c).ok()
+            }).map(|c| c.api_key).unwrap_or_default()
+        } else {
+            String::new()
+        }
+    } else {
+        api_key
+    };
+    
     let config = AzureConfig {
         endpoint,
-        api_key,
+        api_key: final_api_key,
         deployment_name,
         api_version: api_version.unwrap_or_else(|| "2024-02-01".to_string()),
     };
     
-    let config_file = index_path.join("azure_config.json");
     let json = serde_json::to_string_pretty(&config)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
     
@@ -1131,4 +1201,33 @@ pub async fn execute_clippy_action(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn is_git_repo(path: String) -> Result<bool, String> {
     Ok(git_assistant::is_git_repo(&path))
+}
+
+/// Delete duplicate files - used by Git Clippy
+#[tauri::command(rename_all = "camelCase")]
+pub async fn delete_duplicate_files(file_paths: Vec<String>) -> Result<serde_json::Value, String> {
+    println!("[RUST] delete_duplicate_files: {} files", file_paths.len());
+    
+    let mut deleted = 0;
+    let mut errors: Vec<String> = Vec::new();
+    
+    for path in &file_paths {
+        match fs::remove_file(path) {
+            Ok(_) => {
+                deleted += 1;
+                println!("[RUST] Deleted: {}", path);
+            }
+            Err(e) => {
+                let error_msg = format!("Failed to delete {}: {}", path, e);
+                println!("[RUST] {}", error_msg);
+                errors.push(error_msg);
+            }
+        }
+    }
+    
+    Ok(serde_json::json!({
+        "success": errors.is_empty(),
+        "deleted": deleted,
+        "errors": errors
+    }))
 }

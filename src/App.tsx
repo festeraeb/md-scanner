@@ -71,6 +71,7 @@ export default function App() {
     const [azureApiKey, setAzureApiKey] = useState("");
     const [azureDeployment, setAzureDeployment] = useState("text-embedding-ada-002");
     const [showAzureConfig, setShowAzureConfig] = useState(false);
+    const [hasExistingKey, setHasExistingKey] = useState(false);
 
     // Cluster state
     const [clusterStatus, setClusterStatus] = useState<OperationStatus>("idle");
@@ -173,10 +174,15 @@ export default function App() {
         try {
             const config = await tauriService.loadAzureConfig(dir);
             setAzureConfigured(config.configured);
+            setHasExistingKey(config.has_key || false);
             if (config.endpoint) setAzureEndpoint(config.endpoint);
             if (config.deployment_name) setAzureDeployment(config.deployment_name);
+            // Clear the key field - we don't return it for security
+            // but show placeholder if key exists
+            setAzureApiKey("");
         } catch (error) {
             console.log("No Azure config found");
+            setHasExistingKey(false);
         }
     };
 
@@ -186,8 +192,13 @@ export default function App() {
             setErrorMsg("Please scan a folder first to set the index location");
             return;
         }
-        if (!azureEndpoint || !azureApiKey || !azureDeployment) {
-            setErrorMsg("Please fill in all Azure configuration fields");
+        // Only require key if no existing key saved
+        if (!azureEndpoint || !azureDeployment) {
+            setErrorMsg("Please fill in endpoint and deployment name");
+            return;
+        }
+        if (!azureApiKey && !hasExistingKey) {
+            setErrorMsg("Please enter your API key");
             return;
         }
 
@@ -542,13 +553,14 @@ export default function App() {
                                                     />
                                                 </div>
                                                 <div className="form-group">
-                                                    <label>API Key:</label>
+                                                    <label>API Key: {hasExistingKey && <span style={{color: 'var(--success-color)', fontSize: '0.85em'}}> (saved)</span>}</label>
                                                     <input
                                                         type="password"
-                                                        placeholder="Your Azure OpenAI API key"
+                                                        placeholder={hasExistingKey ? "Key already saved - enter new key to update" : "Your Azure OpenAI API key"}
                                                         value={azureApiKey}
                                                         onChange={(e) => setAzureApiKey(e.target.value)}
                                                     />
+                                                    {hasExistingKey && <small style={{color: 'var(--text-secondary)'}}>Leave blank to keep existing key</small>}
                                                 </div>
                                                 <div className="form-group">
                                                     <label>Deployment Name:</label>

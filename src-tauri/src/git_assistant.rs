@@ -50,6 +50,7 @@ pub struct GitClippyReport {
     pub suggestions: Vec<ClippySuggestion>,
     pub duplicates: Vec<DuplicateFile>,
     pub commit_suggestions: Vec<CommitSuggestion>,
+    pub copy_pattern_files: Vec<FileSuggestion>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -69,12 +70,19 @@ pub struct ClippyAction {
     pub data: Option<serde_json::Value>,
 }
 
-/// Run a git command and return output
+/// Run a git command and return output (with hidden window on Windows)
 fn run_git_command(repo_path: &str, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(repo_path)
-        .output()
+    #[cfg(windows)]
+    use std::os::windows::process::CommandExt;
+    
+    let mut cmd = Command::new("git");
+    cmd.args(args).current_dir(repo_path);
+    
+    // Hide the console window on Windows
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    
+    let output = cmd.output()
         .map_err(|e| format!("Failed to run git: {}", e))?;
 
     if output.status.success() {
@@ -357,6 +365,7 @@ pub fn generate_clippy_report(
 
     let mut suggestions: Vec<ClippySuggestion> = Vec::new();
     let mut duplicates: Vec<DuplicateFile> = Vec::new();
+    let mut copy_pattern_files: Vec<FileSuggestion> = Vec::new();
 
     // Check uncommitted files
     if status.uncommitted_files > 200 {
@@ -514,6 +523,7 @@ pub fn generate_clippy_report(
         }
 
         let copy_suggestions = detect_copy_patterns(files);
+        copy_pattern_files = copy_suggestions.clone();
         if copy_suggestions.len() > 10 {
             suggestions.push(ClippySuggestion {
                 id: "copy_patterns_extreme".to_string(),
@@ -683,6 +693,7 @@ pub fn generate_clippy_report(
         suggestions,
         duplicates,
         commit_suggestions,
+        copy_pattern_files,
     })
 }
 

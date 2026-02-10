@@ -40,6 +40,13 @@ interface CommitSuggestion {
     category: string;
 }
 
+interface FileSuggestion {
+    file_path: string;
+    suggestion: string;
+    action: string;
+    reason: string;
+}
+
 interface GitClippyReport {
     status: GitStatus;
     urgency_level: string;
@@ -47,6 +54,7 @@ interface GitClippyReport {
     suggestions: ClippySuggestion[];
     duplicates: DuplicateFile[];
     commit_suggestions: CommitSuggestion[];
+    copy_pattern_files: FileSuggestion[];
 }
 
 interface Props {
@@ -60,6 +68,7 @@ export const GitAssistant: React.FC<Props> = ({ repoPath, indexPath }) => {
     const [error, setError] = useState<string | null>(null);
     const [showDuplicates, setShowDuplicates] = useState(false);
     const [showCommitSuggestions, setShowCommitSuggestions] = useState(false);
+    const [showCopyPatterns, setShowCopyPatterns] = useState(false);
     const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(new Set());
     const [actionResult, setActionResult] = useState<string | null>(null);
 
@@ -94,6 +103,33 @@ export const GitAssistant: React.FC<Props> = ({ repoPath, indexPath }) => {
 
         if (action.action_type === 'show_duplicates') {
             setShowDuplicates(true);
+            return;
+        }
+
+        if (action.action_type === 'show_copies') {
+            setShowCopyPatterns(true);
+            return;
+        }
+
+        if (action.action_type === 'cleanup') {
+            // Direct cleanup - delete all duplicates
+            try {
+                const duplicatePaths = report?.duplicates.flatMap(d => d.duplicates) || [];
+                if (duplicatePaths.length === 0) {
+                    setActionResult('No duplicates to clean up');
+                    return;
+                }
+                const result = await invoke<{ success: boolean, deleted: number, errors: string[] }>('delete_duplicate_files', {
+                    filePaths: duplicatePaths
+                });
+                setActionResult(`Deleted ${result.deleted} duplicate files`);
+                setTimeout(() => {
+                    setActionResult(null);
+                    loadReport();
+                }, 2000);
+            } catch (e) {
+                setError(String(e));
+            }
             return;
         }
 
@@ -341,7 +377,25 @@ export const GitAssistant: React.FC<Props> = ({ repoPath, indexPath }) => {
                             <button className="action-btn secondary" onClick={() => setShowDuplicates(false)}>
                                 Cancel
                             </button>
-                            <button className="action-btn danger">
+                            <button
+                                className="action-btn danger"
+                                onClick={async () => {
+                                    try {
+                                        const duplicatePaths = report.duplicates.flatMap(d => d.duplicates);
+                                        const result = await invoke<{ success: boolean, deleted: number, errors: string[] }>('delete_duplicate_files', {
+                                            filePaths: duplicatePaths
+                                        });
+                                        setActionResult(`Deleted ${result.deleted} files`);
+                                        setShowDuplicates(false);
+                                        setTimeout(() => {
+                                            setActionResult(null);
+                                            loadReport();
+                                        }, 2000);
+                                    } catch (e) {
+                                        setError(String(e));
+                                    }
+                                }}
+                            >
                                 Delete All Duplicates
                             </button>
                         </div>
@@ -417,6 +471,44 @@ export const GitAssistant: React.FC<Props> = ({ repoPath, indexPath }) => {
                 <div className="last-commit">
                     <span className="label">Last commit:</span>
                     <span className="message">"{report.status.last_commit_message}"</span>
+                </div>
+            )}
+
+            {/* Copy Patterns Modal */}
+            {showCopyPatterns && report.copy_pattern_files && report.copy_pattern_files.length > 0 && (
+                <div className="modal-overlay" onClick={() => setShowCopyPatterns(false)}>
+                    <div className="modal" onClick={e => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h3>📋 Files with Copy/Backup Patterns</h3>
+                            <button className="close-btn" onClick={() => setShowCopyPatterns(false)}>×</button>
+                        </div>
+                        <div className="modal-content">
+                            <p className="modal-description">
+                                These files have naming patterns like '_copy', '_backup', '_old', etc.
+                                Consider using git branches instead!
+                            </p>
+                            {report.copy_pattern_files.map((file, i) => (
+                                <div key={i} className="copy-pattern-item">
+                                    <div className="file-path">{file.file_path}</div>
+                                    <div className="file-suggestion">{file.suggestion}</div>
+                                    <div className="file-reason">{file.reason}</div>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="modal-footer">
+                            <button className="action-btn secondary" onClick={() => setShowCopyPatterns(false)}>
+                                Close
+                            </button>
+                            <button
+                                className="action-btn primary"
+                                onClick={() => {
+                                    window.open('https://git-scm.com/book/en/v2/Git-Branching-Branches-in-a-Nutshell', '_blank');
+                                }}
+                            >
+                                Learn Git Branching
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
 

@@ -31,6 +31,7 @@ fn main() {
             commands::get_git_clippy_report,
             commands::execute_clippy_action,
             commands::is_git_repo,
+            commands::delete_duplicate_files,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
