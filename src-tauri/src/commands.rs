@@ -1426,3 +1426,223 @@ pub async fn delete_duplicate_files(file_paths: Vec<String>) -> Result<serde_jso
         "errors": errors
     }))
 }
+
+// ============================================================================
+// FILE INTELLIGENCE COMMANDS
+// ============================================================================
+
+use crate::file_intelligence::{
+    self, DiscoveredDocument, OrganizationSuggestion, ScanStatistics, UserPreferences,
+};
+use std::sync::Mutex;
+use once_cell::sync::Lazy;
+
+// Global state for user preferences (will be replaced with SQLite later)
+static USER_PREFS: Lazy<Mutex<UserPreferences>> = Lazy::new(|| Mutex::new(UserPreferences::default()));
+static LAST_SCAN: Lazy<Mutex<Vec<DiscoveredDocument>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+/// Scan a directory for organizable documents
+#[tauri::command(rename_all = "camelCase")]
+pub async fn scan_for_documents(root_path: String, max_depth: Option<usize>) -> Result<serde_json::Value, String> {
+    println!("[FILE_INTEL] scan_for_documents: {}", root_path);
+    
+    let documents = file_intelligence::scan_for_documents(&root_path, max_depth)?;
+    
+    // Store for later use
+    if let Ok(mut scan) = LAST_SCAN.lock() {
+        *scan = documents.clone();
+    }
+    
+    let count = documents.len();
+    
+    Ok(serde_json::json!({
+        "success": true,
+        "document_count": count,
+        "documents": documents
+    }))
+}
+
+/// Get organization suggestions based on last scan
+#[tauri::command(rename_all = "camelCase")]
+pub async fn get_organization_suggestions() -> Result<serde_json::Value, String> {
+    println!("[FILE_INTEL] get_organization_suggestions");
+    
+    let documents = LAST_SCAN.lock()
+        .map_err(|e| format!("Lock error: {}", e))?
+        .clone();
+    
+    let prefs = USER_PREFS.lock()
+        .map_err(|e| format!("Lock error: {}", e))?
+        .clone();
+    
+    if documents.is_empty() {
+        return Ok(serde_json::json!({
+            "success": true,
+            "suggestions": [],
+            "message": "No documents scanned yet. Run scan_for_documents first."
+        }));
+    }
+    
+    let suggestions = file_intelligence::generate_suggestions(&documents, &prefs);
+    
+    Ok(serde_json::json!({
+        "success": true,
+        "suggestion_count": suggestions.len(),
+        "suggestions": suggestions
+    }))
+}
+
+/// Get statistics about the scanned documents
+#[tauri::command(rename_all = "camelCase")]
+pub async fn get_scan_statistics() -> Result<serde_json::Value, String> {
+    println!("[FILE_INTEL] get_scan_statistics");
+    
+    let documents = LAST_SCAN.lock()
+        .map_err(|e| format!("Lock error: {}", e))?
+        .clone();
+    
+    if documents.is_empty() {
+        return Ok(serde_json::json!({
+            "success": false,
+            "message": "No documents scanned yet"
+        }));
+    }
+    
+    let stats = file_intelligence::calculate_statistics(&documents);
+    let patterns = file_intelligence::detect_naming_patterns(&documents);
+    
+    Ok(serde_json::json!({
+        "success": true,
+        "statistics": stats,
+        "naming_patterns": patterns
+    }))
+}
+
+/// Dismiss a suggestion (don't suggest this file again)
+#[tauri::command(rename_all = "camelCase")]
+pub async fn dismiss_suggestion(file_path: String) -> Result<serde_json::Value, String> {
+    println!("[FILE_INTEL] dismiss_suggestion: {}", file_path);
+    
+    let mut prefs = USER_PREFS.lock()
+        .map_err(|e| format!("Lock error: {}", e))?;
+    
+    prefs.dismissed_suggestions.push(file_path.clone());
+    
+    Ok(serde_json::json!({
+        "success": true,
+        "dismissed": file_path
+    }))
+}
+
+// ============================================================================
+// FILE WATCHER COMMANDS
+// ============================================================================
+
+use crate::file_watcher::{FileWatcher, WatchConfig, FileEvent, SavePrompterConfig};
+
+static FILE_WATCHER: Lazy<Mutex<Option<FileWatcher>>> = Lazy::new(|| Mutex::new(None));
+static WATCHER_EVENTS: Lazy<Mutex<Vec<FileEvent>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+/// Start the file watcher
+#[tauri::command(rename_all = "camelCase")]
+pub async fn start_file_watcher(watch_paths: Option<Vec<String>>) -> Result<serde_json::Value, String> {
+    println!("[FILE_WATCHER] start_file_watcher");
+    
+    let mut config = WatchConfig::default();
+    if let Some(paths) = watch_paths {
+        config.paths = paths;
+    }
+    
+    let mut watcher = FileWatcher::new(config.clone());
+    let rx = watcher.start()?;
+    
+    // Store the watcher
+    {
+        let mut w = FILE_WATCHER.lock().map_err(|e| format!("Lock error: {}", e))?;
+        *w = Some(watcher);
+    }
+    
+    // Spawn a thread to collect events
+    let events = Arc::clone(&WATCHER_EVENTS);
+    std::thread::spawn(move || {
+        while let Ok(event) = rx.recv() {
+            if let Ok(mut e) = events.lock() {
+                e.push(event);
+                // Keep only last 100 events
+                if e.len() > 100 {
+                    e.remove(0);
+                }
+            }
+        }
+    });
+    
+    Ok(serde_json::json!({
+        "success": true,
+        "watching": config.paths,
+        "message": "File watcher started"
+    }))
+}
+
+/// Stop the file watcher
+#[tauri::command(rename_all = "camelCase")]
+pub async fn stop_file_watcher() -> Result<serde_json::Value, String> {
+    println!("[FILE_WATCHER] stop_file_watcher");
+    
+    let mut watcher_lock = FILE_WATCHER.lock().map_err(|e| format!("Lock error: {}", e))?;
+    
+    if let Some(ref mut watcher) = *watcher_lock {
+        watcher.stop()?;
+    }
+    
+    *watcher_lock = None;
+    
+    Ok(serde_json::json!({
+        "success": true,
+        "message": "File watcher stopped"
+    }))
+}
+
+/// Get pending file events
+#[tauri::command(rename_all = "camelCase")]
+pub async fn get_file_events(clear: Option<bool>) -> Result<serde_json::Value, String> {
+    let mut events = WATCHER_EVENTS.lock()
+        .map_err(|e| format!("Lock error: {}", e))?;
+    
+    let result = events.clone();
+    
+    if clear.unwrap_or(false) {
+        events.clear();
+    }
+    
+    Ok(serde_json::json!({
+        "success": true,
+        "event_count": result.len(),
+        "events": result
+    }))
+}
+
+/// Get file watcher status
+#[tauri::command(rename_all = "camelCase")]
+pub async fn get_watcher_status() -> Result<serde_json::Value, String> {
+    let watcher_lock = FILE_WATCHER.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let events = WATCHER_EVENTS.lock().map_err(|e| format!("Lock error: {}", e))?;
+    
+    let (is_running, paths) = match &*watcher_lock {
+        Some(w) => {
+            let state = w.get_state()?;
+            (state.is_running, state.watched_paths)
+        }
+        None => (false, Vec::new()),
+    };
+    
+    Ok(serde_json::json!({
+        "success": true,
+        "is_running": is_running,
+        "watched_paths": paths,
+        "pending_events": events.len()
+    }))
+}
+
+use std::sync::Arc;
+
+

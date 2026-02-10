@@ -32,6 +32,16 @@ fn main() {
             commands::execute_clippy_action,
             commands::is_git_repo,
             commands::delete_duplicate_files,
+            // File Intelligence commands
+            commands::scan_for_documents,
+            commands::get_organization_suggestions,
+            commands::get_scan_statistics,
+            commands::dismiss_suggestion,
+            // File Watcher commands
+            commands::start_file_watcher,
+            commands::stop_file_watcher,
+            commands::get_file_events,
+            commands::get_watcher_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
