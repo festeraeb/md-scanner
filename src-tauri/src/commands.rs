@@ -1386,32 +1386,39 @@ pub async fn validate_azure_config(
 ) -> Result<serde_json::Value, String> {
     println!("[RUST] validate_azure_config called for endpoint: {}", endpoint);
 
-    // Normalize endpoint
-    let mut base = endpoint.trim_end_matches('/').to_string();
+    // Normalize endpoint. Keep original for suggestion heuristics.
+    let orig = endpoint.trim_end_matches('/').to_string();
+    let mut base = orig.clone();
     let mut suggested: Option<String> = None;
 
-    if base.contains("/api/projects") || base.contains("/api/") {
-        // Try to extract host and suggest cognitiveservices domain
-        if let Ok(url) = reqwest::Url::parse(&base) {
+    // If the user provided a project or API path, suggest the resource host form
+    if orig.contains("/api/projects") || orig.contains("/api/") {
+        if let Ok(url) = reqwest::Url::parse(&orig) {
             if let Some(host) = url.host_str() {
                 if host.contains("services.ai.azure.com") {
                     if let Some(prefix) = host.split('.').next() {
                         suggested = Some(format!("https://{}.cognitiveservices.azure.com", prefix));
                     }
                 } else {
-                    // Suggest base host only
                     suggested = Some(format!("https://{}", host));
                 }
             }
         }
-    } else if base.contains("services.ai.azure.com") {
-        // If user supplied services.ai.azure.com, suggest cognitiveservices
-        if let Ok(url) = reqwest::Url::parse(&base) {
+    } else if orig.contains("services.ai.azure.com") {
+        if let Ok(url) = reqwest::Url::parse(&orig) {
             if let Some(host) = url.host_str() {
                 if let Some(prefix) = host.split('.').next() {
                     suggested = Some(format!("https://{}.cognitiveservices.azure.com", prefix));
                 }
             }
+        }
+    }
+
+    // Ensure base is reduced to scheme + host (+port) only to avoid double-paths
+    if let Ok(url) = reqwest::Url::parse(&base) {
+        if let Some(host) = url.host_str() {
+            let port = url.port().map(|p| format!(":{}", p)).unwrap_or_default();
+            base = format!("{}://{}{}", url.scheme(), host, port);
         }
     }
 
