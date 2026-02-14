@@ -83,6 +83,10 @@ export const tauriService = {
         return invoke("validate_azure_config", { indexDir, endpoint, apiKey, deploymentName, apiVersion });
     },
 
+    async validateAllAzureConfigs(rootPath: string): Promise<any> {
+        return invoke("validate_all_azure_configs", { rootPath });
+    },
+
     async getClustersData(indexDir: string): Promise<Types.ClustersData> {
         return invoke("get_clusters_data", { indexDir });
     },

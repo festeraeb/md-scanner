@@ -308,6 +308,10 @@ export default function App() {
         setValidationMessage("");
     };
 
+    // Validation results UI state
+    const [validationResults, setValidationResults] = useState<any[]>([]);
+    const [showValidationResults, setShowValidationResults] = useState(false);
+
     // Handle embed
     const handleEmbed = async () => {
         if (!indexPath) {
@@ -842,6 +846,23 @@ export default function App() {
                                     {!azureConfigured && (
                                         <span className="hint">Configure Azure OpenAI first</span>
                                     )}
+                                        <button className="btn btn-secondary" onClick={async () => {
+                                            try {
+                                                setErrorMsg("");
+                                                const root = (indexPath && indexPath.includes('.wayfinder_index')) ? indexPath.replace(/\\[^\\]*$/, '') : "C:/Temp";
+                                                const res = await tauriService.validateAllAzureConfigs(root);
+                                                // Show results in a modal or console for now
+                                                console.log('ValidateAll result:', res);
+                                                notify({ id: `validate-${Date.now()}`, title: 'Validation Complete', message: `Validated ${res.results.length} indices`, level: 'info', timeout: 8000 });
+                                                // Store results for more detailed UI
+                                                setValidationResults(res.results || []);
+                                                setShowValidationResults(true);
+                                            } catch (e: any) {
+                                                setErrorMsg(e.toString());
+                                            }
+                                        }}>
+                                            🔍 Validate Saved Configs
+                                        </button>
                                 </div>
 
                                 {embedStatus === "running" && (
@@ -880,6 +901,48 @@ export default function App() {
                                         <p>{errorMsg}</p>
                                     </div>
                                 )}
+
+                                    {/* Validation Results Drawer */}
+                                    {showValidationResults && (
+                                        <div className="validation-results-drawer">
+                                            <h3>Validation Results</h3>
+                                            <button className="btn btn-small" onClick={() => setShowValidationResults(false)}>Close</button>
+                                            <div className="results-list">
+                                                {validationResults.map((r: any, i: number) => (
+                                                    <div key={i} className="validation-item">
+                                                        <h4>{r.index_dir}</h4>
+                                                        {r.error && <p className="warning">Error: {r.error}</p>}
+                                                        {r.config && (
+                                                            <div>
+                                                                <p>Endpoint: {r.config.endpoint}</p>
+                                                                <p>Deployment: {r.config.deployment_name}</p>
+                                                                <p>API Version: {r.config.api_version}</p>
+                                                            </div>
+                                                        )}
+                                                        {r.validation && (
+                                                            <div>
+                                                                <p>Status: {r.validation.success ? 'OK' : 'Failed'}</p>
+                                                                <p>Message: {r.validation.message}</p>
+                                                                {r.validation.suggested_endpoint && (
+                                                                    <div>
+                                                                        <p>Suggested: {r.validation.suggested_endpoint}</p>
+                                                                        <button className="btn btn-small" onClick={async () => {
+                                                                            try {
+                                                                                await tauriService.saveAzureConfig(r.index_dir, r.validation.suggested_endpoint, r.config.api_key || '', r.config.deployment_name || '', r.config.api_version || undefined);
+                                                                                notify({ id: `applied-${i}`, title: 'Applied', message: `Applied suggestion to ${r.index_dir}`, level: 'success' });
+                                                                            } catch (e: any) {
+                                                                                notify({ id: `err-${i}`, title: 'Error', message: e.toString(), level: 'error' });
+                                                                            }
+                                                                        }}>Apply Suggestion</button>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
                             </>
                         )}
                     </section>

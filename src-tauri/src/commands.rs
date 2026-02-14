@@ -1500,6 +1500,76 @@ pub async fn validate_azure_config(
     }))
 }
 
+/// Validate azure_config.json files found under a root path (recursively)
+#[tauri::command(rename_all = "camelCase")]
+pub async fn validate_all_azure_configs(root_path: String) -> Result<serde_json::Value, String> {
+    println!("[RUST] validate_all_azure_configs scanning: {}", root_path);
+
+    let mut results: Vec<serde_json::Value> = Vec::new();
+
+    if !Path::new(&root_path).exists() {
+        return Err(format!("Root path does not exist: {}", root_path));
+    }
+
+    for entry in WalkDir::new(&root_path).into_iter().filter_map(|e| e.ok()) {
+        if entry.file_type().is_dir() && entry.file_name() == ".wayfinder_index" {
+            let idx_dir = entry.path().to_string_lossy().to_string();
+            let cfg_file = entry.path().join("azure_config.json");
+            if cfg_file.exists() {
+                match fs::read_to_string(&cfg_file) {
+                    Ok(content) => {
+                        match serde_json::from_str::<AzureConfig>(&content) {
+                            Ok(cfg) => {
+                                // Call existing validate function to reuse logic
+                                match validate_azure_config(idx_dir.clone(), cfg.endpoint.clone(), cfg.api_key.clone(), cfg.deployment_name.clone(), Some(cfg.api_version.clone())).await {
+                                    Ok(v) => {
+                                        results.push(serde_json::json!({
+                                            "index_dir": idx_dir,
+                                            "config": cfg,
+                                            "validation": v
+                                        }));
+                                    }
+                                    Err(e) => {
+                                        results.push(serde_json::json!({
+                                            "index_dir": idx_dir,
+                                            "config": cfg,
+                                            "error": e
+                                        }));
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                results.push(serde_json::json!({
+                                    "index_dir": idx_dir,
+                                    "error": format!("Failed to parse config: {}", e)
+                                }));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        results.push(serde_json::json!({
+                            "index_dir": idx_dir,
+                            "error": format!("Failed to read config: {}", e)
+                        }));
+                    }
+                }
+            } else {
+                // No config present
+                results.push(serde_json::json!({
+                    "index_dir": idx_dir,
+                    "config": null,
+                    "validation": {"success": false, "message": "No azure_config.json present"}
+                }));
+            }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "success": true,
+        "root_scanned": root_path,
+        "results": results
+    }))
+}
 
 /// Get clusters summary for display
 #[tauri::command(rename_all = "camelCase")]
