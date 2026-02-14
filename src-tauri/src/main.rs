@@ -43,6 +43,7 @@ fn main() {
             commands::get_file_events,
             commands::get_watcher_status,
             commands::validate_azure_config,
+            commands::validate_all_azure_configs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
